@@ -8,6 +8,7 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
 import { deleteByUrl } from '../services/storage';
+import { StockMovement } from '../models/StockMovement';
 
 /**
  * Picks the right payment WorkflowState based on how much has been paid.
@@ -198,6 +199,37 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
   if (kind === 'fulfillment') {
     order.fulfillmentState = state._id;
     order.fulfillmentLink = link?.trim() || undefined;
+
+    if (state.deductsStock) {
+      const productItems = order.items.filter((i) => i.product);
+      if (productItems.length) {
+        const productIds = productItems.map((i) => i.product!);
+        const tracked = await Product.find({
+          _id: { $in: productIds },
+          tenant: req.auth.tenantId,
+          trackStock: true,
+        }).select('_id');
+        const trackedSet = new Set(tracked.map((p) => p._id.toString()));
+
+        await Promise.all(
+          productItems
+            .filter((i) => trackedSet.has(i.product!.toString()))
+            .map((i) =>
+              Promise.all([
+                Product.updateOne({ _id: i.product }, { $inc: { stock: -i.quantity } }),
+                StockMovement.create({
+                  tenant: req.auth!.tenantId,
+                  product: i.product,
+                  order: order._id,
+                  delta: -i.quantity,
+                  reason: 'order',
+                  createdBy: req.auth!.userId ? new Types.ObjectId(req.auth!.userId) : undefined,
+                }),
+              ])
+            )
+        );
+      }
+    }
   } else {
     order.paymentState = state._id;
   }

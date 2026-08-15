@@ -17,6 +17,7 @@ export interface IWorkflowState {
   notifyCustomer: boolean;
   vibrant: boolean;
   requiresLink: boolean;
+  deductsStock: boolean;
   allowedRoles: MembershipRole[];
   createdAt: Date;
   updatedAt: Date;
@@ -36,6 +37,7 @@ const workflowStateSchema = new Schema<IWorkflowState>(
     notifyCustomer: { type: Boolean, default: false },
     vibrant: { type: Boolean, default: false },
     requiresLink: { type: Boolean, default: false },
+    deductsStock: { type: Boolean, default: false },
     allowedRoles: {
       type: [String],
       enum: ['owner', 'admin', 'staff', 'driver'],

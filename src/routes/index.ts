@@ -8,6 +8,8 @@ import { trackingRoutes } from './tracking.routes';
 import { uploadRoutes } from './upload.routes';
 import { storeRoutes } from './store.routes';
 import { categoryRoutes } from './category.routes';
+import { inventoryRoutes } from './inventory.routes';
+import { financeRoutes } from './finance.routes';
 
 export const router = Router();
 
@@ -20,3 +22,5 @@ router.use('/track', trackingRoutes);
 router.use('/uploads', uploadRoutes);
 router.use('/store', storeRoutes);
 router.use('/categories', categoryRoutes);
+router.use('/inventory', inventoryRoutes);
+router.use('/finance', financeRoutes);

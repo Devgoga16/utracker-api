@@ -16,12 +16,13 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const tenantId = req.auth.tenantId;
 
-  const { kind: rawKind, name, color, icon, notifyCustomer, allowedRoles } = req.body as {
+  const { kind: rawKind, name, color, icon, notifyCustomer, deductsStock, allowedRoles } = req.body as {
     kind: unknown;
     name?: string;
     color?: string;
     icon?: string;
     notifyCustomer?: boolean;
+    deductsStock?: boolean;
     allowedRoles?: MembershipRole[];
   };
 
@@ -41,6 +42,7 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
     isFinal: false,
     isCancellation: false,
     notifyCustomer: notifyCustomer ?? false,
+    deductsStock: kind === 'fulfillment' ? (deductsStock ?? false) : false,
     allowedRoles: allowedRoles?.length ? allowedRoles : ['owner', 'admin'],
   });
 
@@ -54,7 +56,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   const state = await WorkflowState.findOne({ _id: req.params.id, tenant: tenantId });
   if (!state) throw ApiError.notFound('Estado no encontrado');
 
-  const { name, color, icon, isInitial, isFinal, notifyCustomer, vibrant, requiresLink, allowedRoles } = req.body as {
+  const { name, color, icon, isInitial, isFinal, notifyCustomer, vibrant, requiresLink, deductsStock, allowedRoles } = req.body as {
     name?: string;
     color?: string;
     icon?: string;
@@ -63,6 +65,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
     notifyCustomer?: boolean;
     vibrant?: boolean;
     requiresLink?: boolean;
+    deductsStock?: boolean;
     allowedRoles?: MembershipRole[];
   };
 
@@ -75,6 +78,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   if (notifyCustomer !== undefined) state.notifyCustomer = notifyCustomer;
   if (vibrant !== undefined) state.vibrant = vibrant;
   if (requiresLink !== undefined) state.requiresLink = requiresLink;
+  if (deductsStock !== undefined) state.deductsStock = state.kind === 'fulfillment' ? deductsStock : false;
   if (allowedRoles !== undefined) {
     if (!allowedRoles.length) throw ApiError.badRequest('Al menos un rol debe poder mover el pedido a este estado');
     state.allowedRoles = allowedRoles;
