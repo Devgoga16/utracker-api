@@ -73,7 +73,7 @@ export const getPublicOrderLink = asyncHandler(async (req: Request, res: Respons
   await link.populate('items.product');
   const tenant = await Tenant.findById(link.tenant);
   res.json({
-    tenant: { name: tenant?.name, logoUrl: tenant?.logoUrl },
+    tenant: { name: tenant?.name, logoUrl: tenant?.logoUrl, schedule: tenant?.schedule ?? [] },
     items: link.items,
     deliveryType: link.deliveryType,
     expiresAt: link.expiresAt,
@@ -85,10 +85,11 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
   const link = await resolveLinkOrExpire(String(req.params.token));
   if (link.status !== 'pending') throw ApiError.conflict(`Order link is ${link.status}`);
 
-  const { customer: customerInput, deliveryType, delivery } = req.body as {
+  const { customer: customerInput, deliveryType, delivery, scheduledFor } = req.body as {
     customer: { name: string; phone: string; email?: string; address?: string };
     deliveryType?: 'pickup' | 'delivery_third_party' | 'delivery_own';
     delivery?: { address?: string; reference?: string };
+    scheduledFor?: { date: string; franja: 'morning' | 'afternoon' | 'evening' };
   };
   if (!customerInput?.name || !customerInput?.phone) throw ApiError.badRequest('customer.name and customer.phone are required');
 
@@ -140,6 +141,7 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
     stateHistory: [buildHistoryEntry(initialFulfillment), buildHistoryEntry(initialPayment)],
     createdVia: 'order_link',
     orderLink: link._id,
+    scheduledFor,
   });
 
   link.status = 'used';

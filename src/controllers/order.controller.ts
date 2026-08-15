@@ -51,6 +51,7 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     delivery,
     notes,
     advance,
+    scheduledFor,
   } = req.body as {
     customer: { name: string; phone: string; email?: string; address?: string };
     items: CreateOrderItemInput[];
@@ -58,6 +59,7 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     delivery?: { address?: string; reference?: string; courierName?: string; driver?: string };
     notes?: string;
     advance?: { amount: number; proofImageUrl?: string };
+    scheduledFor?: { date: string; franja: 'morning' | 'afternoon' | 'evening' };
   };
 
   if (!customerInput?.name || !customerInput?.phone) throw ApiError.badRequest('customer.name and customer.phone are required');
@@ -156,6 +158,7 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     ],
     payments: initialPayments,
     createdVia: 'manual',
+    scheduledFor,
     notes,
     createdBy: req.auth.userId,
   });

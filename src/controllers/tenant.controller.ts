@@ -42,10 +42,11 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl, phone } = req.body as {
+  const { name, logoUrl, phone, schedule } = req.body as {
     name?: string;
     logoUrl?: string | null;
     phone?: string | null;
+    schedule?: { day: number; open: string; close: string }[];
   };
 
   const tenant = await Tenant.findById(req.auth.tenantId);
@@ -63,6 +64,22 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
       throw ApiError.badRequest('phone must have between 8 and 15 digits');
     }
     tenant.phone = digits || undefined;
+  }
+
+  if (schedule !== undefined) {
+    const valid =
+      Array.isArray(schedule) &&
+      schedule.every(
+        (d) =>
+          typeof d.day === 'number' &&
+          d.day >= 0 &&
+          d.day <= 6 &&
+          /^\d{2}:\d{2}$/.test(d.open) &&
+          /^\d{2}:\d{2}$/.test(d.close) &&
+          d.open < d.close,
+      );
+    if (!valid) throw ApiError.badRequest('Invalid schedule format');
+    tenant.schedule = schedule;
   }
 
   if (logoUrl !== undefined) {

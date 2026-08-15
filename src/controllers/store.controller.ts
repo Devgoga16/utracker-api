@@ -7,7 +7,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 export const getStoreCatalog = asyncHandler(async (req: Request, res: Response) => {
   // Endpoint publico: solo los campos que el cliente necesita ver.
   const tenant = await Tenant.findOne({ slug: req.params.slug, isActive: true })
-    .select('name slug logoUrl phone')
+    .select('name slug logoUrl phone schedule')
     .lean();
   if (!tenant) throw ApiError.notFound('Store not found');
 

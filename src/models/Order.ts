@@ -3,6 +3,12 @@ import { Schema, model, Types } from 'mongoose';
 
 export type OrderType = 'pickup' | 'delivery_third_party' | 'delivery_own';
 export type OrderCreatedVia = 'manual' | 'order_link';
+export type Franja = 'morning' | 'afternoon' | 'evening';
+
+export interface IScheduledFor {
+  date: string; // "2026-08-20"
+  franja: Franja;
+}
 
 export interface IOrderItem {
   /** Absent on ad-hoc lines: one-off jobs that are not worth a catalog entry. */
@@ -73,6 +79,7 @@ export interface IOrder {
   createdVia: OrderCreatedVia;
   orderLink?: Types.ObjectId;
   fulfillmentLink?: string;
+  scheduledFor?: IScheduledFor;
   notes?: string;
   createdBy?: Types.ObjectId;
   createdAt: Date;
@@ -155,6 +162,15 @@ const orderSchema = new Schema<IOrder>(
     createdVia: { type: String, enum: ['manual', 'order_link'], default: 'manual' },
     orderLink: { type: Schema.Types.ObjectId, ref: 'OrderLink' },
     fulfillmentLink: { type: String },
+    scheduledFor: {
+      type: new Schema<IScheduledFor>(
+        {
+          date: { type: String, required: true },
+          franja: { type: String, enum: ['morning', 'afternoon', 'evening'], required: true },
+        },
+        { _id: false }
+      ),
+    },
     notes: { type: String },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
