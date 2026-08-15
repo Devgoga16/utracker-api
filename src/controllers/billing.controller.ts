@@ -33,7 +33,7 @@ export const generateMonthlyBills = asyncHandler(async (req: Request, res: Respo
 
   let created = 0;
   for (const sub of subs) {
-    const plan = sub.plan as { name: string; price: number } | null;
+    const plan = sub.plan as unknown as { name: string; price: number } | null;
     if (!plan || plan.price === 0) continue;
     const exists = await Bill.exists({ tenant: sub.tenant, period });
     if (exists) continue;

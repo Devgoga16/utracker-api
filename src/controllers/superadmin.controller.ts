@@ -117,13 +117,14 @@ export const assignSubscription = asyncHandler(async (req: Request, res: Respons
 
   // Auto-generate bill for the current month when plan has a price
   if (plan.price > 0 && sub) {
+    const tenantId = new Types.ObjectId(req.params.id as string);
     const now = new Date();
     const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const exists = await Bill.exists({ tenant: req.params.id, period });
+    const exists = await Bill.exists({ tenant: tenantId, period });
     if (!exists) {
       const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
       await Bill.create({
-        tenant: req.params.id,
+        tenant: tenantId,
         subscription: sub._id,
         period,
         planName: plan.name,
