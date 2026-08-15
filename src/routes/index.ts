@@ -10,6 +10,8 @@ import { storeRoutes } from './store.routes';
 import { categoryRoutes } from './category.routes';
 import { inventoryRoutes } from './inventory.routes';
 import { financeRoutes } from './finance.routes';
+import { superadminRoutes } from './superadmin.routes';
+import { subscriptionRoutes } from './subscription.routes';
 
 export const router = Router();
 
@@ -24,3 +26,5 @@ router.use('/store', storeRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/finance', financeRoutes);
+router.use('/superadmin', superadminRoutes);
+router.use('/subscription', subscriptionRoutes);

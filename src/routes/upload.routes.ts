@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { env } from '../config/env';
 import { requireAuth, requireRole, requireTenant } from '../middleware/auth';
+import { requireFeature } from '../middleware/plan';
 import {
   deleteImageHandler,
   storageStatus,
@@ -21,5 +22,5 @@ export const uploadRoutes = Router();
 uploadRoutes.use(requireAuth, requireTenant);
 
 uploadRoutes.get('/status', storageStatus);
-uploadRoutes.post('/', requireRole('owner', 'admin'), upload.single('file'), uploadImageHandler);
+uploadRoutes.post('/', requireRole('owner', 'admin'), requireFeature('imageUploads'), upload.single('file'), uploadImageHandler);
 uploadRoutes.delete('/', requireRole('owner', 'admin'), deleteImageHandler);

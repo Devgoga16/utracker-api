@@ -16,7 +16,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const user = await User.create({ name, email: email.toLowerCase(), passwordHash });
 
   res.status(201).json({
-    user: { id: user._id, name: user.name, email: user.email },
+    user: { id: user._id, name: user.name, email: user.email, isSuperAdmin: user.isSuperAdmin },
     accessToken: signAccessToken(user._id.toString()),
     refreshToken: signRefreshToken(user._id.toString()),
   });
@@ -32,7 +32,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.json({
-    user: { id: user._id, name: user.name, email: user.email },
+    user: { id: user._id, name: user.name, email: user.email, isSuperAdmin: user.isSuperAdmin },
     accessToken: signAccessToken(user._id.toString()),
     refreshToken: signRefreshToken(user._id.toString()),
   });

@@ -5,7 +5,10 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
 export const getStoreCatalog = asyncHandler(async (req: Request, res: Response) => {
-  const tenant = await Tenant.findOne({ slug: req.params.slug, isActive: true }).lean();
+  // Endpoint publico: solo los campos que el cliente necesita ver.
+  const tenant = await Tenant.findOne({ slug: req.params.slug, isActive: true })
+    .select('name slug logoUrl phone')
+    .lean();
   if (!tenant) throw ApiError.notFound('Store not found');
 
   const products = await Product.find({ tenant: tenant._id, isActive: true })

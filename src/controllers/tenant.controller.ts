@@ -42,7 +42,11 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl } = req.body as { name?: string; logoUrl?: string | null };
+  const { name, logoUrl, phone } = req.body as {
+    name?: string;
+    logoUrl?: string | null;
+    phone?: string | null;
+  };
 
   const tenant = await Tenant.findById(req.auth.tenantId);
   if (!tenant) throw ApiError.notFound('Tenant not found');
@@ -50,6 +54,15 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
   if (name !== undefined) {
     if (!name.trim()) throw ApiError.badRequest('name cannot be empty');
     tenant.name = name.trim();
+  }
+
+  if (phone !== undefined) {
+    // Guardamos solo digitos: wa.me no acepta espacios ni signos.
+    const digits = phone?.replace(/\D/g, '') ?? '';
+    if (digits && (digits.length < 8 || digits.length > 15)) {
+      throw ApiError.badRequest('phone must have between 8 and 15 digits');
+    }
+    tenant.phone = digits || undefined;
   }
 
   if (logoUrl !== undefined) {

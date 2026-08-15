@@ -6,3 +6,5 @@ export * from './Customer';
 export * from './WorkflowState';
 export * from './Order';
 export * from './OrderLink';
+export * from './Plan';
+export * from './Subscription';

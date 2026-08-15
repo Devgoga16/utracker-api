@@ -8,6 +8,7 @@ export interface IUser {
   passwordHash: string;
   phone?: string;
   isActive: boolean;
+  isSuperAdmin: boolean;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidate: string): Promise<boolean>;
@@ -20,6 +21,7 @@ const userSchema = new Schema<IUser>(
     passwordHash: { type: String, required: true },
     phone: { type: String },
     isActive: { type: Boolean, default: true },
+    isSuperAdmin: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
