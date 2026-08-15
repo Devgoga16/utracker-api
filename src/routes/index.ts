@@ -12,6 +12,7 @@ import { inventoryRoutes } from './inventory.routes';
 import { financeRoutes } from './finance.routes';
 import { superadminRoutes } from './superadmin.routes';
 import { subscriptionRoutes } from './subscription.routes';
+import { billingRoutes } from './billing.routes';
 
 export const router = Router();
 
@@ -28,3 +29,4 @@ router.use('/inventory', inventoryRoutes);
 router.use('/finance', financeRoutes);
 router.use('/superadmin', superadminRoutes);
 router.use('/subscription', subscriptionRoutes);
+router.use('/billing', billingRoutes);

@@ -8,3 +8,4 @@ export * from './Order';
 export * from './OrderLink';
 export * from './Plan';
 export * from './Subscription';
+export * from './Bill';

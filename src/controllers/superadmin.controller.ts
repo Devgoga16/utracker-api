@@ -6,6 +6,7 @@ import { Subscription } from '../models/Subscription';
 import { Tenant } from '../models/Tenant';
 import { Membership } from '../models/Membership';
 import { Order } from '../models/Order';
+import { Bill } from '../models/Bill';
 import { Types } from 'mongoose';
 
 // GET /superadmin/stats
@@ -114,5 +115,33 @@ export const assignSubscription = asyncHandler(async (req: Request, res: Respons
     { new: true, upsert: true, runValidators: true }
   ).populate('plan', 'name price features');
 
+  // Auto-generate bill for the current month when plan has a price
+  if (plan.price > 0 && sub) {
+    const now = new Date();
+    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const exists = await Bill.exists({ tenant: req.params.id, period });
+    if (!exists) {
+      const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      await Bill.create({
+        tenant: req.params.id,
+        subscription: sub._id,
+        period,
+        planName: plan.name,
+        amount: plan.price,
+        dueDate,
+        status: 'pending',
+      });
+    }
+  }
+
   res.json(sub);
+});
+
+// PATCH /superadmin/tenants/:id/toggle
+export const toggleSubscription = asyncHandler(async (req: Request, res: Response) => {
+  const sub = await Subscription.findOne({ tenant: req.params.id });
+  if (!sub) throw ApiError.notFound('No hay suscripción para este negocio');
+  sub.status = sub.status === 'suspended' ? 'active' : 'suspended';
+  await sub.save();
+  res.json({ status: sub.status });
 });
