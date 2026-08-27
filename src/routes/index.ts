@@ -13,6 +13,7 @@ import { financeRoutes } from './finance.routes';
 import { superadminRoutes } from './superadmin.routes';
 import { subscriptionRoutes } from './subscription.routes';
 import { billingRoutes } from './billing.routes';
+import { campaignRoutes } from './campaign.routes';
 
 export const router = Router();
 
@@ -30,3 +31,4 @@ router.use('/finance', financeRoutes);
 router.use('/superadmin', superadminRoutes);
 router.use('/subscription', subscriptionRoutes);
 router.use('/billing', billingRoutes);
+router.use('/campaigns', campaignRoutes);

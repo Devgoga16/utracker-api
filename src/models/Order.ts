@@ -78,6 +78,7 @@ export interface IOrder {
   payments: IPaymentEntry[];
   createdVia: OrderCreatedVia;
   orderLink?: Types.ObjectId;
+  campaign?: Types.ObjectId;
   fulfillmentLink?: string;
   scheduledFor?: IScheduledFor;
   notes?: string;
@@ -161,6 +162,7 @@ const orderSchema = new Schema<IOrder>(
     payments: { type: [paymentEntrySchema], default: [] },
     createdVia: { type: String, enum: ['manual', 'order_link'], default: 'manual' },
     orderLink: { type: Schema.Types.ObjectId, ref: 'OrderLink' },
+    campaign: { type: Schema.Types.ObjectId, ref: 'Campaign' },
     fulfillmentLink: { type: String },
     scheduledFor: {
       type: new Schema<IScheduledFor>(

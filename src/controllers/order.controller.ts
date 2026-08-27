@@ -168,7 +168,9 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
 
 export const listOrders = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const orders = await Order.find({ tenant: req.auth.tenantId })
+  const filter: Record<string, unknown> = { tenant: req.auth.tenantId };
+  if (req.query.campaign) filter.campaign = req.query.campaign as string;
+  const orders = await Order.find(filter)
     .sort({ createdAt: -1 })
     .populate('customer fulfillmentState paymentState');
   res.json({ orders });
