@@ -8,6 +8,7 @@ import { Order } from '../models/Order';
 import { Customer } from '../models/Customer';
 import { WorkflowState } from '../models/WorkflowState';
 import { Tenant } from '../models/Tenant';
+import { env } from '../config/env';
 import { notifyOwnerNewOrder } from '../services/whatsapp';
 
 function generateToken(): string {
@@ -323,6 +324,6 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
 
   res.status(201).json({
     order: populated,
-    trackingUrl: `${process.env.FRONTEND_URL ?? ''}/track/${(populated as any).trackingToken}`,
+    trackingUrl: `${env.frontendUrl}/track/${(populated as any).trackingToken}`,
   });
 });

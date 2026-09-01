@@ -23,6 +23,14 @@ export const env = {
   orderLinkTtlHours: Number(process.env.ORDER_LINK_TTL_HOURS ?? 24),
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
 
+  /**
+   * Base publica del front. Alimenta los links de seguimiento que salen por
+   * WhatsApp, donde una URL relativa no sirve de nada. Cae a CORS_ORIGIN
+   * porque en la practica es el mismo dominio.
+   */
+  frontendUrl: (process.env.FRONTEND_URL ?? process.env.CORS_ORIGIN ?? 'http://localhost:5173')
+    .replace(/\/$/, ''),
+
   // Optional on purpose: the API must still boot without storage configured.
   // `isStorageConfigured()` gates the upload endpoint at request time instead.
   r2: {
@@ -33,9 +41,19 @@ export const env = {
     publicBaseUrl: process.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, ''),
     maxUploadBytes: Number(process.env.R2_MAX_UPLOAD_BYTES ?? 5 * 1024 * 1024),
   },
+
+  // Opcional igual que R2: sin esto la API arranca, solo no manda WhatsApp.
+  whatsapp: {
+    apiUrl: process.env.WHATSAPP_API_URL?.replace(/\/$/, ''),
+    apiKey: process.env.WHATSAPP_API_KEY,
+  },
 };
 
 export function isStorageConfigured(): boolean {
   const { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl } = env.r2;
   return Boolean(accountId && accessKeyId && secretAccessKey && bucket && publicBaseUrl);
+}
+
+export function isWhatsappConfigured(): boolean {
+  return Boolean(env.whatsapp.apiUrl && env.whatsapp.apiKey);
 }
