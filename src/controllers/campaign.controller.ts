@@ -7,6 +7,8 @@ import { Product } from '../models/Product';
 import { Order } from '../models/Order';
 import { Customer } from '../models/Customer';
 import { WorkflowState } from '../models/WorkflowState';
+import { Tenant } from '../models/Tenant';
+import { notifyOwnerNewOrder } from '../services/whatsapp';
 
 function generateToken(): string {
   return crypto.randomBytes(8).toString('hex');
@@ -31,10 +33,9 @@ export const getCampaign = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createCampaign = asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, coverImageUrl, startDate, endDate, items, deliveryTypes, schedule } = req.body as {
+  const { name, description, startDate, endDate, items, deliveryTypes, schedule } = req.body as {
     name: string;
     description?: string;
-    coverImageUrl?: string;
     startDate: string;
     endDate: string;
     items: { productId: string; stock: number }[];
@@ -82,7 +83,6 @@ export const createCampaign = asyncHandler(async (req: Request, res: Response) =
     token: generateToken(),
     name,
     description,
-    coverImageUrl,
     startDate: new Date(startDate),
     endDate: new Date(endDate),
     items: campaignItems,
@@ -104,10 +104,9 @@ export const updateCampaign = asyncHandler(async (req: Request, res: Response) =
     throw ApiError.badRequest('No puedes editar una campaña terminada o cancelada');
   }
 
-  const { name, description, coverImageUrl, startDate, endDate, status, items, deliveryTypes, schedule } = req.body as {
+  const { name, description, startDate, endDate, status, items, deliveryTypes, schedule } = req.body as {
     name?: string;
     description?: string;
-    coverImageUrl?: string;
     startDate?: string;
     endDate?: string;
     status?: string;
@@ -118,7 +117,6 @@ export const updateCampaign = asyncHandler(async (req: Request, res: Response) =
 
   if (name) campaign.name = name;
   if (description !== undefined) campaign.description = description;
-  if (coverImageUrl !== undefined) campaign.coverImageUrl = coverImageUrl;
   if (startDate) campaign.startDate = new Date(startDate);
   if (endDate) campaign.endDate = new Date(endDate);
   if (status && ['draft', 'active', 'cancelled'].includes(status)) {
@@ -167,7 +165,13 @@ export const deleteCampaign = asyncHandler(async (req: Request, res: Response) =
 export const getPublicCampaign = asyncHandler(async (req: Request, res: Response) => {
   const campaign = await Campaign.findOne({ token: req.params.token }).lean();
   if (!campaign) throw ApiError.notFound('Campaña no encontrada');
-  res.json({ campaign });
+
+  // La campaña se muestra con la identidad de la tienda (logo, nombre, color).
+  const tenant = await Tenant.findById(campaign.tenant)
+    .select('name slug logoUrl phone brandColor')
+    .lean();
+
+  res.json({ campaign, tenant });
 });
 
 export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Response) => {
@@ -303,6 +307,19 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
   });
 
   const populated = await Order.findById((order as any)._id).populate('customer');
+
+  // Notificar al dueño por WhatsApp
+  const ownerTenant = await Tenant.findById(campaign.tenant).select('phone').lean();
+  if (ownerTenant?.phone) {
+    notifyOwnerNewOrder({
+      ownerPhone: ownerTenant.phone,
+      customerName: customerData.name,
+      customerPhone: customerData.phone,
+      items: orderLines.map((l) => ({ name: l.name, quantity: l.quantity, unitPrice: l.unitPrice })),
+      total: totalAmount,
+      source: `campaña: ${campaign.name}`,
+    });
+  }
 
   res.status(201).json({
     order: populated,

@@ -42,10 +42,11 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl, phone, schedule } = req.body as {
+  const { name, logoUrl, phone, brandColor, schedule } = req.body as {
     name?: string;
     logoUrl?: string | null;
     phone?: string | null;
+    brandColor?: string | null;
     schedule?: { day: number; open: string; close: string }[];
   };
 
@@ -64,6 +65,14 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
       throw ApiError.badRequest('phone must have between 8 and 15 digits');
     }
     tenant.phone = digits || undefined;
+  }
+
+  if (brandColor !== undefined) {
+    const hex = brandColor?.trim() ?? '';
+    if (hex && !/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      throw ApiError.badRequest('brandColor must be a hex color like #4f46e5');
+    }
+    tenant.brandColor = hex.toLowerCase() || undefined;
   }
 
   if (schedule !== undefined) {

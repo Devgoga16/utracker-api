@@ -8,6 +8,7 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
 import { deleteByUrl } from '../services/storage';
+import { sendWhatsappMessage } from '../services/whatsapp';
 import { StockMovement } from '../models/StockMovement';
 
 /**
@@ -241,6 +242,22 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
 
   order.stateHistory.push(buildHistoryEntry(state, req.auth.userId));
   await order.save();
+
+  // Notificación WhatsApp (best-effort, no bloquea la respuesta)
+  if (state.notifyCustomer) {
+    const populated = await order.populate('customer');
+    const customer = populated.customer as any;
+    if (customer?.phone) {
+      const frontendUrl = process.env.FRONTEND_URL ?? '';
+      const trackingUrl = order.trackingToken ? `${frontendUrl}/track/${order.trackingToken}` : '';
+      const lines = [
+        `Hola ${customer.name}, tu pedido ha sido actualizado.`,
+        `Estado: *${state.name}*`,
+        trackingUrl ? `Puedes seguir tu pedido aquí: ${trackingUrl}` : '',
+      ].filter(Boolean).join('\n');
+      sendWhatsappMessage(customer.phone, lines).catch(() => {});
+    }
+  }
 
   res.json({ order });
 });

@@ -22,7 +22,6 @@ export interface ICampaign extends Document {
   token: string;
   name: string;
   description?: string;
-  coverImageUrl?: string;
   startDate: Date;
   endDate: Date;
   items: ICampaignItem[];
@@ -51,7 +50,6 @@ const campaignSchema = new Schema<ICampaign>(
     token: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     description: String,
-    coverImageUrl: String,
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     items: { type: [campaignItemSchema], required: true },

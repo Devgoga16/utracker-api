@@ -13,6 +13,8 @@ export interface ITenant {
   logoUrl?: string;
   /** Solo digitos con codigo de pais, ej. 51987654321. Alimenta el boton de WhatsApp de la tienda. */
   phone?: string;
+  /** Hex "#rrggbb". Tine la tienda publica y las campanas; el front deriva la escala completa. */
+  brandColor?: string;
   schedule?: IDaySchedule[];
   isActive: boolean;
   createdAt: Date;
@@ -25,6 +27,7 @@ const tenantSchema = new Schema<ITenant>(
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     logoUrl: { type: String },
     phone: { type: String, trim: true },
+    brandColor: { type: String, trim: true },
     schedule: [
       {
         day: { type: Number, required: true, min: 0, max: 6 },
