@@ -79,6 +79,8 @@ export interface IOrder {
   createdVia: OrderCreatedVia;
   orderLink?: Types.ObjectId;
   campaign?: Types.ObjectId;
+  /** true mientras el pedido está cancelado y su stock ya fue devuelto. Evita devolver dos veces. */
+  stockReleased?: boolean;
   fulfillmentLink?: string;
   scheduledFor?: IScheduledFor;
   notes?: string;
@@ -163,6 +165,7 @@ const orderSchema = new Schema<IOrder>(
     createdVia: { type: String, enum: ['manual', 'order_link'], default: 'manual' },
     orderLink: { type: Schema.Types.ObjectId, ref: 'OrderLink' },
     campaign: { type: Schema.Types.ObjectId, ref: 'Campaign' },
+    stockReleased: { type: Boolean, default: false },
     fulfillmentLink: { type: String },
     scheduledFor: {
       type: new Schema<IScheduledFor>(

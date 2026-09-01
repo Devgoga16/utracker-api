@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { Order } from '../models/Order';
+import { Campaign } from '../models/Campaign';
 import { Product } from '../models/Product';
 import { Customer } from '../models/Customer';
 import { WorkflowState } from '../models/WorkflowState';
@@ -28,6 +29,68 @@ async function resolvePaymentState(tenantId: string, totalPaid: number, totalAmo
     return states.find((s) => !s.isInitial && !s.isFinal) ?? states.find((s) => s.isInitial) ?? null;
   }
   return states.find((s) => s.isInitial) ?? null;
+}
+
+/** Suma las unidades de cada producto en el pedido. */
+function quantitiesByProduct(order: { items: { product?: Types.ObjectId; quantity: number }[] }) {
+  const map = new Map<string, number>();
+  for (const line of order.items) {
+    if (!line.product) continue;
+    const key = line.product.toString();
+    map.set(key, (map.get(key) ?? 0) + line.quantity);
+  }
+  return map;
+}
+
+/** Devuelve a la campaña las unidades que este pedido tenía reservadas. */
+async function releaseCampaignStock(
+  campaignId: Types.ObjectId,
+  tenantId: string,
+  quantities: Map<string, number>,
+  sign: 1 | -1,
+) {
+  const campaign = await Campaign.findOne({ _id: campaignId, tenant: tenantId });
+  if (!campaign) return;
+  for (const [productId, qty] of quantities) {
+    const item = campaign.items.find((i) => i.product.toString() === productId);
+    if (item) item.sold = Math.max(0, item.sold + sign * qty);
+  }
+  await campaign.save();
+}
+
+/**
+ * Devuelve al inventario lo que este pedido descontó de verdad.
+ *
+ * Se apoya en StockMovement en vez de en las cantidades del pedido: uno que se
+ * cancela antes de pasar por el estado que descuenta nunca descontó nada, y
+ * devolverle stock crearía unidades de la nada.
+ */
+async function restoreCatalogStock(orderId: Types.ObjectId, tenantId: string, userId?: string) {
+  const movements = await StockMovement.find({ order: orderId, tenant: tenantId }).lean();
+  if (!movements.length) return;
+
+  const net = new Map<string, number>();
+  for (const m of movements) {
+    const key = m.product.toString();
+    net.set(key, (net.get(key) ?? 0) + m.delta);
+  }
+
+  for (const [productId, delta] of net) {
+    if (delta >= 0) continue; // ya está devuelto
+    const giveBack = -delta;
+    await Promise.all([
+      Product.updateOne({ _id: productId, tenant: tenantId }, { $inc: { stock: giveBack } }),
+      StockMovement.create({
+        tenant: tenantId,
+        product: productId,
+        order: orderId,
+        delta: giveBack,
+        reason: 'adjustment',
+        note: 'Devolución automática por pedido cancelado',
+        createdBy: userId ? new Types.ObjectId(userId) : undefined,
+      }),
+    ]);
+  }
 }
 
 interface CreateOrderItemInput {
@@ -235,6 +298,37 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
             )
         );
       }
+      // Volvió a descontar: si estaba devuelto, ya no lo está.
+      order.stockReleased = false;
+    }
+
+    /**
+     * Cancelar es "este pedido nunca se concretó": vuelven las unidades de la
+     * campaña y lo que se hubiera descontado del inventario. El flag evita
+     * devolver dos veces si se pasa entre dos estados de cancelación.
+     */
+    if (state.isCancellation && !order.stockReleased) {
+      if (order.campaign) {
+        await releaseCampaignStock(
+          order.campaign,
+          req.auth.tenantId,
+          quantitiesByProduct(order),
+          -1,
+        );
+      }
+      await restoreCatalogStock(order._id, req.auth.tenantId, req.auth.userId);
+      order.stockReleased = true;
+    } else if (!state.isCancellation && order.stockReleased) {
+      // Se revirtió la cancelación: la campaña vuelve a reservar sus unidades.
+      if (order.campaign) {
+        await releaseCampaignStock(
+          order.campaign,
+          req.auth.tenantId,
+          quantitiesByProduct(order),
+          1,
+        );
+      }
+      order.stockReleased = false;
     }
   } else {
     order.paymentState = state._id;
@@ -333,6 +427,21 @@ export const deleteOrder = asyncHandler(async (req: Request, res: Response) => {
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
+
+  /**
+   * El pedido reservó unidades de una campaña: al borrarlo vuelven a estar
+   * disponibles, si no el stock de la campaña queda comido para siempre.
+   * Si ya estaba cancelado esas unidades volvieron en ese momento, así que
+   * devolverlas aquí otra vez las duplicaría.
+   */
+  if (order.campaign && !order.stockReleased) {
+    await releaseCampaignStock(
+      order.campaign,
+      req.auth.tenantId,
+      quantitiesByProduct(order),
+      -1,
+    );
+  }
 
   // Clean up R2 payment proof images (best-effort).
   await Promise.allSettled(
