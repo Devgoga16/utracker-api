@@ -72,3 +72,26 @@ export function isStorageConfigured(): boolean {
 export function isWhatsappConfigured(): boolean {
   return Boolean(env.whatsapp.apiUrl && env.whatsapp.apiKey);
 }
+
+/**
+ * Decide si un origen puede llamar a la API.
+ *
+ * Acepta comodines ("https://*.vercel.app") porque los previews de Vercel
+ * estrenan subdominio en cada deploy y listarlos uno por uno es imposible.
+ * El `*` no cruza puntos, asi que un comodin de un nivel no habilita
+ * subdominios mas profundos de los que se quiso permitir.
+ */
+export function isOriginAllowed(origin: string): boolean {
+  const clean = origin.replace(/\/$/, '');
+
+  return env.corsOrigins.some((allowed) => {
+    if (!allowed.includes('*')) return allowed === clean;
+
+    const pattern = allowed
+      .split('*')
+      .map((chunk) => chunk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('[^.]*');
+
+    return new RegExp(`^${pattern}$`).test(clean);
+  });
+}
