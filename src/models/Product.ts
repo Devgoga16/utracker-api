@@ -13,6 +13,16 @@ export type CatalogKind = 'product' | 'service';
  */
 export type PricingMode = 'fixed' | 'quoted';
 
+/**
+ * Valores que este producto tiene para un filtro configurable.
+ * Es una lista porque un mismo producto puede venir, por ejemplo, en varias
+ * tallas; al filtrar basta con que coincida uno.
+ */
+export interface IProductAttribute {
+  filter: Types.ObjectId;
+  values: string[];
+}
+
 export interface IProduct {
   _id: Types.ObjectId;
   tenant: Types.ObjectId;
@@ -23,7 +33,18 @@ export interface IProduct {
   price: number;
   images: string[];
   category?: string;
+  attributes: IProductAttribute[];
   variants: IProductVariant[];
+  /**
+   * Dias que toma tenerlo listo. 0 = disponible para recojo inmediato.
+   * Fija la fecha mas temprana que el cliente puede elegir al pedirlo.
+   */
+  preparationDays: number;
+  /** Si al pedirlo hay que dejar un adelanto antes de que el negocio lo prepare. */
+  requiresAdvance: boolean;
+  /** 'percent' = porcentaje del subtotal de la linea; 'fixed' = soles por unidad. */
+  advanceType: 'fixed' | 'percent';
+  advanceValue: number;
   stock?: number;
   trackStock: boolean;
   isActive: boolean;
@@ -39,6 +60,14 @@ const variantSchema = new Schema<IProductVariant>(
   { _id: false }
 );
 
+const attributeSchema = new Schema<IProductAttribute>(
+  {
+    filter: { type: Schema.Types.ObjectId, ref: 'ProductFilter', required: true },
+    values: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 const productSchema = new Schema<IProduct>(
   {
     tenant: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true },
@@ -49,7 +78,12 @@ const productSchema = new Schema<IProduct>(
     price: { type: Number, required: true, min: 0 },
     images: { type: [String], default: [] },
     category: { type: String },
+    attributes: { type: [attributeSchema], default: [] },
     variants: { type: [variantSchema], default: [] },
+    preparationDays: { type: Number, default: 0, min: 0 },
+    requiresAdvance: { type: Boolean, default: false },
+    advanceType: { type: String, enum: ['fixed', 'percent'], default: 'percent' },
+    advanceValue: { type: Number, default: 50, min: 0 },
     stock: { type: Number },
     trackStock: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },

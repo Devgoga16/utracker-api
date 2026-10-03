@@ -31,6 +31,11 @@ export class ApiError extends Error {
     return new ApiError(413, message);
   }
 
+  /** Una dependencia externa falló o no respondió: el error no es nuestro. */
+  static badGateway(message: string) {
+    return new ApiError(502, message);
+  }
+
   static serviceUnavailable(message: string) {
     return new ApiError(503, message);
   }

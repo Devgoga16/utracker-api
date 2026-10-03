@@ -9,7 +9,7 @@ import { Customer } from '../models/Customer';
 import { WorkflowState } from '../models/WorkflowState';
 import { Tenant } from '../models/Tenant';
 import { env } from '../config/env';
-import { notifyOwnerNewOrder } from '../services/whatsapp';
+import { notifyOwnerNewOrder, notifyCustomerNewOrder } from '../services/whatsapp';
 
 function generateToken(): string {
   return crypto.randomBytes(8).toString('hex');
@@ -309,18 +309,36 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
 
   const populated = await Order.findById((order as any)._id).populate('customer');
 
-  // Notificar al dueño por WhatsApp
-  const ownerTenant = await Tenant.findById(campaign.tenant).select('phone').lean();
+  const ownerTenant = await Tenant.findById(campaign.tenant).select('name phone').lean();
+  const notifyItems = orderLines.map((l) => ({
+    name: l.name,
+    quantity: l.quantity,
+    unitPrice: l.unitPrice,
+  }));
+
   if (ownerTenant?.phone) {
     notifyOwnerNewOrder({
       ownerPhone: ownerTenant.phone,
       customerName: customerData.name,
       customerPhone: customerData.phone,
-      items: orderLines.map((l) => ({ name: l.name, quantity: l.quantity, unitPrice: l.unitPrice })),
+      items: notifyItems,
       total: totalAmount,
       source: `campaña: ${campaign.name}`,
     });
   }
+
+  // Comprobante para el cliente, con su link de seguimiento.
+  notifyCustomerNewOrder({
+    customerPhone: customerData.phone,
+    customerName: customerData.name,
+    businessName: ownerTenant?.name ?? 'el negocio',
+    items: notifyItems,
+    total: totalAmount,
+    trackingToken: (populated as any)?.trackingToken,
+    delivery: { type: resolvedType, address },
+    scheduledFor,
+    source: campaign.name,
+  });
 
   res.status(201).json({
     order: populated,

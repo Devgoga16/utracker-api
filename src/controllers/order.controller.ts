@@ -4,12 +4,18 @@ import { Order } from '../models/Order';
 import { Campaign } from '../models/Campaign';
 import { Product } from '../models/Product';
 import { Customer } from '../models/Customer';
+import { Tenant } from '../models/Tenant';
 import { WorkflowState } from '../models/WorkflowState';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
+import { orderCode } from '../utils/orderCode';
 import { deleteByUrl } from '../services/storage';
-import { notifyCustomerStateChange } from '../services/whatsapp';
+import {
+  notifyCustomerStateChange,
+  notifyCustomerPaymentValidated,
+  notifyCustomerPaymentRejected,
+} from '../services/whatsapp';
 import { StockMovement } from '../models/StockMovement';
 
 /**
@@ -20,6 +26,17 @@ import { StockMovement } from '../models/StockMovement';
  * 0 < totalPaid < total      → first non-initial, non-final, non-cancellation state ("Parcial")
  * totalPaid >= total         → first non-cancellation final state ("Pagado")
  */
+/**
+ * Solo cuenta lo que el negocio ya confirmó que llegó.
+ *
+ * Un comprobante que subió el cliente no mueve el estado de pago hasta que
+ * alguien lo revise: si no, bastaría con subir cualquier captura para que el
+ * pedido figure como pagado.
+ */
+function validatedTotal(payments: { amount: number; validated?: boolean }[]) {
+  return payments.reduce((s, p) => (p.validated === false ? s : s + p.amount), 0);
+}
+
 async function resolvePaymentState(tenantId: string, totalPaid: number, totalAmount: number) {
   const states = await WorkflowState.find({ tenant: tenantId, kind: 'payment' }).sort({ position: 1 });
   if (totalPaid >= totalAmount) {
@@ -376,11 +393,17 @@ export const registerPayment = asyncHandler(async (req: Request, res: Response) 
     amount,
     proofImageUrl,
     note,
+    // Lo registra el negocio, así que no hay nada que validar.
+    validated: true,
+    validatedAt: new Date(),
     registeredAt: new Date(),
     registeredBy: req.auth.userId ? new Types.ObjectId(req.auth.userId) : undefined,
   });
 
-  const totalPaid = order.payments.reduce((s, p) => s + p.amount, 0);
+  // Ya hay un pago nuevo: lo rechazado quedó atrás.
+  order.paymentRejectedAt = undefined;
+
+  const totalPaid = validatedTotal(order.payments);
   const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
   if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
     order.paymentState = newPaymentState._id;
@@ -388,6 +411,56 @@ export const registerPayment = asyncHandler(async (req: Request, res: Response) 
   }
 
   await order.save();
+  res.json({ order });
+});
+
+/**
+ * El negocio confirma que el adelanto que subió el cliente efectivamente llegó.
+ * Recién acá cuenta como pagado y puede mover el estado de pago.
+ */
+export const validatePayment = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.auth?.tenantId) throw ApiError.unauthorized();
+  const { kind } = req.params as { kind: 'advance' | 'balance' };
+  if (!['advance', 'balance'].includes(kind)) {
+    throw ApiError.badRequest('kind must be advance or balance');
+  }
+
+  const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
+  if (!order) throw ApiError.notFound('Order not found');
+
+  const payment = order.payments.find((p) => p.kind === kind);
+  if (!payment) throw ApiError.notFound('No hay un pago de ese tipo en este pedido');
+  if (payment.validated) throw ApiError.conflict('Ese pago ya está validado');
+
+  payment.validated = true;
+  payment.validatedAt = new Date();
+  order.paymentRejectedAt = undefined;
+
+  const totalPaid = validatedTotal(order.payments);
+  const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
+  if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
+    order.paymentState = newPaymentState._id;
+    order.stateHistory.push(buildHistoryEntry(newPaymentState, req.auth.userId));
+  }
+
+  await order.save();
+
+  // El cliente mandó su comprobante a ciegas: merece saber que fue aceptado.
+  const [customer, tenant] = await Promise.all([
+    Customer.findById(order.customer).select('name phone').lean(),
+    Tenant.findById(req.auth.tenantId).select('name').lean(),
+  ]);
+  if (customer?.phone) {
+    notifyCustomerPaymentValidated({
+      customerPhone: customer.phone,
+      customerName: customer.name,
+      businessName: tenant?.name ?? 'El negocio',
+      amount: payment.amount,
+      orderCode: orderCode(order.trackingToken),
+      trackingToken: order.trackingToken,
+    });
+  }
+
   res.json({ order });
 });
 
@@ -408,7 +481,7 @@ export const deletePayment = asyncHandler(async (req: Request, res: Response) =>
   if (removed.proofImageUrl) await deleteByUrl(removed.proofImageUrl);
 
   // Re-derive payment state from the remaining payments.
-  const totalPaid = order.payments.reduce((s, p) => s + p.amount, 0);
+  const totalPaid = validatedTotal(order.payments);
   const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
   if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
     order.paymentState = newPaymentState._id;
@@ -416,6 +489,33 @@ export const deletePayment = asyncHandler(async (req: Request, res: Response) =>
   }
 
   await order.save();
+
+  /**
+   * Borrar un pago que estaba sin validar es, en los hechos, rechazarlo: el
+   * cliente lo mandó y necesita saber que tiene que regularizarlo. Borrar uno
+   * ya validado es una corrección interna y no se le avisa.
+   */
+  if (removed.validated === false) {
+    // Queda constancia para el seguimiento: el pago borrado no la dejaría.
+    order.paymentRejectedAt = new Date();
+    await order.save();
+
+    const [customer, tenant] = await Promise.all([
+      Customer.findById(order.customer).select('name phone').lean(),
+      Tenant.findById(req.auth.tenantId).select('name').lean(),
+    ]);
+    if (customer?.phone) {
+      notifyCustomerPaymentRejected({
+        customerPhone: customer.phone,
+        customerName: customer.name,
+        businessName: tenant?.name ?? 'El negocio',
+        amount: removed.amount,
+        orderCode: orderCode(order.trackingToken),
+        trackingToken: order.trackingToken,
+      });
+    }
+  }
+
   res.json({ order });
 });
 

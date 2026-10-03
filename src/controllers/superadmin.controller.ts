@@ -7,6 +7,14 @@ import { Tenant } from '../models/Tenant';
 import { Membership } from '../models/Membership';
 import { Order } from '../models/Order';
 import { Bill } from '../models/Bill';
+import { Campaign } from '../models/Campaign';
+import { Category } from '../models/Category';
+import { Customer } from '../models/Customer';
+import { OrderLink } from '../models/OrderLink';
+import { Product } from '../models/Product';
+import { StockMovement } from '../models/StockMovement';
+import { WorkflowState } from '../models/WorkflowState';
+import { deleteByUrl } from '../services/storage';
 import { Types } from 'mongoose';
 
 // GET /superadmin/stats
@@ -145,4 +153,104 @@ export const toggleSubscription = asyncHandler(async (req: Request, res: Respons
   sub.status = sub.status === 'suspended' ? 'active' : 'suspended';
   await sub.save();
   res.json({ status: sub.status });
+});
+
+/**
+ * Junta todas las imágenes que este negocio subió a R2.
+ *
+ * Se recolectan antes de borrar los documentos: después ya no habría de dónde
+ * sacar las URLs y los archivos quedarían ocupando espacio para siempre.
+ */
+async function collectTenantImageUrls(tenantId: Types.ObjectId): Promise<string[]> {
+  const [tenant, products, orders, bills] = await Promise.all([
+    Tenant.findById(tenantId).select('logoUrl').lean(),
+    Product.find({ tenant: tenantId }).select('images').lean(),
+    Order.find({ tenant: tenantId }).select('payments.proofImageUrl').lean(),
+    Bill.find({ tenant: tenantId }).select('proofImageUrl').lean(),
+  ]);
+
+  const urls = [
+    tenant?.logoUrl,
+    ...products.flatMap((p) => p.images ?? []),
+    ...orders.flatMap((o) => (o.payments ?? []).map((p) => p.proofImageUrl)),
+    ...bills.map((b) => b.proofImageUrl),
+  ].filter((u): u is string => Boolean(u));
+
+  // Las campañas congelan la imagen del producto, así que ya está en la lista.
+  return Array.from(new Set(urls));
+}
+
+// DELETE /superadmin/tenants/:id
+export const deleteTenant = asyncHandler(async (req: Request, res: Response) => {
+  const tenantId = new Types.ObjectId(req.params.id as string);
+
+  const tenant = await Tenant.findById(tenantId);
+  if (!tenant) throw ApiError.notFound('Negocio no encontrado');
+
+  /**
+   * El nombre exacto viaja en el body como confirmación. Es irreversible y no
+   * hay papelera: vale pedir algo más deliberado que un clic.
+   */
+  const { confirmName } = req.body as { confirmName?: string };
+  if (confirmName?.trim() !== tenant.name) {
+    throw ApiError.badRequest(
+      'Escribe el nombre exacto del negocio para confirmar la eliminación.',
+    );
+  }
+
+  const imageUrls = await collectTenantImageUrls(tenantId);
+
+  const filter = { tenant: tenantId };
+  const [
+    orders,
+    products,
+    customers,
+    campaigns,
+    orderLinks,
+    stockMovements,
+    categories,
+    workflowStates,
+    bills,
+    subscriptions,
+    memberships,
+  ] = await Promise.all([
+    Order.deleteMany(filter),
+    Product.deleteMany(filter),
+    Customer.deleteMany(filter),
+    Campaign.deleteMany(filter),
+    OrderLink.deleteMany(filter),
+    StockMovement.deleteMany(filter),
+    Category.deleteMany(filter),
+    WorkflowState.deleteMany(filter),
+    Bill.deleteMany(filter),
+    Subscription.deleteMany(filter),
+    Membership.deleteMany(filter),
+  ]);
+
+  await tenant.deleteOne();
+
+  // Las imágenes van al final y sin bloquear: si R2 falla, los datos ya se
+  // fueron y reintentar el borrado no debe revivir al negocio.
+  void Promise.allSettled(imageUrls.map((url) => deleteByUrl(url))).then((results) => {
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed) console.error(`[tenant:${tenantId}] ${failed} imágenes no se pudieron borrar de R2`);
+  });
+
+  res.json({
+    ok: true,
+    deleted: {
+      orders: orders.deletedCount,
+      products: products.deletedCount,
+      customers: customers.deletedCount,
+      campaigns: campaigns.deletedCount,
+      orderLinks: orderLinks.deletedCount,
+      stockMovements: stockMovements.deletedCount,
+      categories: categories.deletedCount,
+      workflowStates: workflowStates.deletedCount,
+      bills: bills.deletedCount,
+      subscriptions: subscriptions.deletedCount,
+      memberships: memberships.deletedCount,
+      images: imageUrls.length,
+    },
+  });
 });

@@ -13,7 +13,7 @@ async function main() {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ origin: env.corsOrigin, credentials: true }));
+  app.use(cors({ origin: env.corsOrigins, credentials: true }));
   app.use(express.json());
   app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 

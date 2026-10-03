@@ -4,6 +4,7 @@ import { Tenant } from '../models/Tenant';
 import { WorkflowState } from '../models/WorkflowState';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { orderCode } from '../utils/orderCode';
 
 /**
  * Public order tracking. No auth: the token in the URL is the credential, so the
@@ -52,17 +53,26 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
       };
     });
 
-  const advance = order.payments
-    .filter((p) => p.kind === 'advance')
-    .reduce((sum, p) => sum + p.amount, 0);
-  const balance = order.payments
-    .filter((p) => p.kind === 'balance')
-    .reduce((sum, p) => sum + p.amount, 0);
+  /**
+   * Un comprobante sin revisar no es dinero recibido: si se sumara, el cliente
+   * vería "pagado" algo que el negocio todavía no confirmó.
+   */
+  const isPaid = (p: { validated?: boolean }) => p.validated !== false;
+  const sum = (kind: 'advance' | 'balance', paid: boolean) =>
+    order.payments
+      .filter((p) => p.kind === kind && isPaid(p) === paid)
+      .reduce((acc, p) => acc + p.amount, 0);
+
+  const advance = sum('advance', true);
+  const balance = sum('balance', true);
+  const pending = sum('advance', false) + sum('balance', false);
   const totalPaid = advance + balance;
   const remaining = Math.max(0, order.totalAmount - totalPaid);
 
   res.json({
-    tenant: { name: tenant?.name, logoUrl: tenant?.logoUrl },
+    // El teléfono alimenta el botón para mandar el voucher por WhatsApp.
+    tenant: { name: tenant?.name, logoUrl: tenant?.logoUrl, phone: tenant?.phone },
+    code: orderCode(order.trackingToken),
     createdAt: order.createdAt,
     type: order.type,
     isCancelled,
@@ -75,7 +85,9 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
       images: (i.product as unknown as { images?: string[] } | null)?.images ?? [],
     })),
     totalAmount: order.totalAmount,
-    payments: { advance, balance, totalPaid, remaining },
+    payments: { advance, balance, totalPaid, remaining, pending },
+    // Solo entonces el cliente tiene algo que regularizar.
+    paymentRejected: Boolean(order.paymentRejectedAt),
     fulfillmentLink: order.fulfillmentLink,
     currentState: current && { name: current.name, color: current.color, icon: current.icon },
     paymentState: payment && { name: payment.name, color: payment.color, icon: payment.icon },

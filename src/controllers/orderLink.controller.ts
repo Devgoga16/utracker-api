@@ -10,7 +10,7 @@ import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
-import { notifyOwnerNewOrder } from '../services/whatsapp';
+import { notifyOwnerNewOrder, notifyCustomerNewOrder } from '../services/whatsapp';
 
 interface OrderLinkItemInput {
   productId: string;
@@ -149,18 +149,35 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
   link.resultingOrder = order._id;
   await link.save();
 
-  // Notificar al dueño del negocio por WhatsApp
-  const ownerTenant = await Tenant.findById(link.tenant).select('phone').lean();
+  const ownerTenant = await Tenant.findById(link.tenant).select('name phone').lean();
+  const notifyItems = items.map((i) => ({
+    name: i.name,
+    quantity: i.quantity,
+    unitPrice: i.unitPrice,
+  }));
+
   if (ownerTenant?.phone) {
     notifyOwnerNewOrder({
       ownerPhone: ownerTenant.phone,
       customerName: customerInput.name,
       customerPhone: customerInput.phone,
-      items: items.map((i) => ({ name: i.name, quantity: i.quantity, unitPrice: i.unitPrice })),
+      items: notifyItems,
       total: totalAmount,
       source: 'link de pedido',
     });
   }
+
+  // Comprobante para el cliente, con su link de seguimiento.
+  notifyCustomerNewOrder({
+    customerPhone: customerInput.phone,
+    customerName: customerInput.name,
+    businessName: ownerTenant?.name ?? 'el negocio',
+    items: notifyItems,
+    total: totalAmount,
+    trackingToken: order.trackingToken,
+    delivery: { type, address: delivery?.address },
+    scheduledFor,
+  });
 
   res.status(201).json({ order });
 });

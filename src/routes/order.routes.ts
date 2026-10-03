@@ -10,6 +10,7 @@ import {
   listOrders,
   registerPayment,
   updateOrderState,
+  validatePayment,
 } from '../controllers/order.controller';
 import { createOrderLink } from '../controllers/orderLink.controller';
 
@@ -22,6 +23,7 @@ orderRoutes.get('/:id', getOrder);
 orderRoutes.delete('/:id', deleteOrder);
 orderRoutes.patch('/:id/state', updateOrderState);
 orderRoutes.post('/:id/payments', registerPayment);
+orderRoutes.patch('/:id/payments/:kind/validate', validatePayment);
 orderRoutes.delete('/:id/payments/:kind', deletePayment);
 orderRoutes.post('/:id/delivery-attempts', addDeliveryAttempt);
 orderRoutes.post('/links', requireFeature('publicOrderLinks'), createOrderLink);

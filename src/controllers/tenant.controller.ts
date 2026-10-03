@@ -42,13 +42,17 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl, phone, brandColor, schedule } = req.body as {
-    name?: string;
-    logoUrl?: string | null;
-    phone?: string | null;
-    brandColor?: string | null;
-    schedule?: { day: number; open: string; close: string }[];
-  };
+  const { name, logoUrl, phone, brandColor, schedule, deliveryTypes, deliveryFranjas, paymentMethods } =
+    req.body as {
+      name?: string;
+      logoUrl?: string | null;
+      phone?: string | null;
+      brandColor?: string | null;
+      schedule?: { day: number; open: string; close: string }[];
+      deliveryTypes?: string[];
+      deliveryFranjas?: string[];
+      paymentMethods?: { name?: string; details?: string; qrImageUrl?: string }[];
+    };
 
   const tenant = await Tenant.findById(req.auth.tenantId);
   if (!tenant) throw ApiError.notFound('Tenant not found');
@@ -73,6 +77,29 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
       throw ApiError.badRequest('brandColor must be a hex color like #4f46e5');
     }
     tenant.brandColor = hex.toLowerCase() || undefined;
+  }
+
+  if (deliveryTypes !== undefined) {
+    const allowed = ['pickup', 'delivery_own'];
+    const clean = [...new Set(deliveryTypes)].filter((t) => allowed.includes(t));
+    tenant.deliveryTypes = clean as ('pickup' | 'delivery_own')[];
+  }
+
+  if (deliveryFranjas !== undefined) {
+    const allowed = ['morning', 'afternoon', 'evening'];
+    const clean = [...new Set(deliveryFranjas)].filter((f) => allowed.includes(f));
+    tenant.deliveryFranjas = clean as ('morning' | 'afternoon' | 'evening')[];
+  }
+
+  if (paymentMethods !== undefined) {
+    // Un método sin nombre no le dice nada al cliente: se descarta.
+    tenant.paymentMethods = (paymentMethods ?? [])
+      .filter((m) => m?.name?.trim())
+      .map((m) => ({
+        name: m.name!.trim(),
+        details: m.details?.trim() || undefined,
+        qrImageUrl: m.qrImageUrl || undefined,
+      }));
   }
 
   if (schedule !== undefined) {

@@ -2,12 +2,13 @@ import { randomBytes } from 'crypto';
 import { Schema, model, Types } from 'mongoose';
 
 export type OrderType = 'pickup' | 'delivery_third_party' | 'delivery_own';
-export type OrderCreatedVia = 'manual' | 'order_link';
+export type OrderCreatedVia = 'manual' | 'order_link' | 'store';
 export type Franja = 'morning' | 'afternoon' | 'evening';
 
 export interface IScheduledFor {
   date: string; // "2026-08-20"
-  franja: Franja;
+  /** Opcional: un negocio puede agendar el dia sin partirlo en franjas. */
+  franja?: Franja;
 }
 
 export interface IOrderItem {
@@ -48,6 +49,16 @@ export interface IPaymentEntry {
   amount: number;
   proofImageUrl?: string;
   note?: string;
+  /**
+   * false mientras el negocio no confirme que el dinero llego.
+   *
+   * Un adelanto que sube el cliente desde la tienda entra sin validar: hasta
+   * que el dueno lo revise no cuenta como pagado ni mueve el estado de pago.
+   * Lo que registra el dueno a mano nace validado, que es como funcionaba
+   * antes de que existiera este campo.
+   */
+  validated: boolean;
+  validatedAt?: Date;
   registeredAt: Date;
   registeredBy?: Types.ObjectId;
 }
@@ -81,6 +92,14 @@ export interface IOrder {
   campaign?: Types.ObjectId;
   /** true mientras el pedido está cancelado y su stock ya fue devuelto. Evita devolver dos veces. */
   stockReleased?: boolean;
+  /**
+   * Cuando el negocio rechazó un comprobante del cliente.
+   *
+   * El pago rechazado se borra, así que sin esta marca el seguimiento no
+   * tendría cómo saber que hay algo que regularizar. Se limpia en cuanto
+   * entra o se valida un pago nuevo.
+   */
+  paymentRejectedAt?: Date;
   fulfillmentLink?: string;
   scheduledFor?: IScheduledFor;
   notes?: string;
@@ -130,6 +149,9 @@ const paymentEntrySchema = new Schema<IPaymentEntry>(
     amount: { type: Number, required: true, min: 0 },
     proofImageUrl: { type: String },
     note: { type: String },
+    // Los pagos que ya existian se dan por validados: antes no habia revision.
+    validated: { type: Boolean, default: true },
+    validatedAt: { type: Date },
     registeredAt: { type: Date, default: Date.now },
     registeredBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
@@ -162,16 +184,17 @@ const orderSchema = new Schema<IOrder>(
     paymentState: { type: Schema.Types.ObjectId, ref: 'WorkflowState', required: true },
     stateHistory: { type: [stateHistorySchema], default: [] },
     payments: { type: [paymentEntrySchema], default: [] },
-    createdVia: { type: String, enum: ['manual', 'order_link'], default: 'manual' },
+    createdVia: { type: String, enum: ['manual', 'order_link', 'store'], default: 'manual' },
     orderLink: { type: Schema.Types.ObjectId, ref: 'OrderLink' },
     campaign: { type: Schema.Types.ObjectId, ref: 'Campaign' },
     stockReleased: { type: Boolean, default: false },
+    paymentRejectedAt: { type: Date },
     fulfillmentLink: { type: String },
     scheduledFor: {
       type: new Schema<IScheduledFor>(
         {
           date: { type: String, required: true },
-          franja: { type: String, enum: ['morning', 'afternoon', 'evening'], required: true },
+          franja: { type: String, enum: ['morning', 'afternoon', 'evening'] },
         },
         { _id: false }
       ),

@@ -2,6 +2,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+/** "http://a.com, https://b.com" -> ['http://a.com', 'https://b.com'] */
+function corsOriginList(): string[] {
+  const raw = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+  const list = raw
+    .split(',')
+    .map((o) => o.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  return list.length ? list : ['http://localhost:5173'];
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -21,15 +31,20 @@ export const env = {
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
   },
   orderLinkTtlHours: Number(process.env.ORDER_LINK_TTL_HOURS ?? 24),
-  corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+
+  /**
+   * Origenes permitidos, separados por coma. El front llama a la API desde
+   * otro dominio, asi que sin esto el navegador bloquea todo. Acepta varios
+   * para cubrir local y los previews de Vercel a la vez.
+   */
+  corsOrigins: corsOriginList(),
 
   /**
    * Base publica del front. Alimenta los links de seguimiento que salen por
-   * WhatsApp, donde una URL relativa no sirve de nada. Cae a CORS_ORIGIN
-   * porque en la practica es el mismo dominio.
+   * WhatsApp, donde una URL relativa no sirve de nada. Cae al primer origen
+   * de CORS porque en la practica es el mismo dominio.
    */
-  frontendUrl: (process.env.FRONTEND_URL ?? process.env.CORS_ORIGIN ?? 'http://localhost:5173')
-    .replace(/\/$/, ''),
+  frontendUrl: (process.env.FRONTEND_URL?.trim() || corsOriginList()[0]).replace(/\/$/, ''),
 
   // Optional on purpose: the API must still boot without storage configured.
   // `isStorageConfigured()` gates the upload endpoint at request time instead.
