@@ -10,7 +10,11 @@ import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
-import { notifyOwnerNewOrder, notifyCustomerNewOrder } from '../services/whatsapp';
+import {
+  notifyOwnerNewOrder,
+  notifyCustomerNewOrder,
+  sessionForTenant,
+} from '../services/whatsapp';
 
 interface OrderLinkItemInput {
   productId: string;
@@ -93,6 +97,11 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
     scheduledFor?: { date: string; franja: 'morning' | 'afternoon' | 'evening' };
   };
   if (!customerInput?.name || !customerInput?.phone) throw ApiError.badRequest('customer.name and customer.phone are required');
+  // El calendario depende de esto: un pedido sin fecha no se puede planificar.
+  if (!scheduledFor?.date) {
+    throw ApiError.badRequest('Indica la fecha de entrega o recojo');
+  }
+
 
   const type = link.deliveryType === 'customer_choice' ? deliveryType : link.deliveryType;
   if (!type) throw ApiError.badRequest('deliveryType is required');
@@ -150,6 +159,7 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
   await link.save();
 
   const ownerTenant = await Tenant.findById(link.tenant).select('name phone').lean();
+  const session = await sessionForTenant(link.tenant);
   const notifyItems = items.map((i) => ({
     name: i.name,
     quantity: i.quantity,
@@ -164,6 +174,7 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
       items: notifyItems,
       total: totalAmount,
       source: 'link de pedido',
+      session,
     });
   }
 
@@ -177,6 +188,7 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
     trackingToken: order.trackingToken,
     delivery: { type, address: delivery?.address },
     scheduledFor,
+    session,
   });
 
   res.status(201).json({ order });

@@ -40,6 +40,17 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
   const steps = states
     // A cancellation step listed as "upcoming" would alarm the customer for no reason.
     .filter((s) => !s.isCancellation || s._id.toString() === currentId)
+    /**
+     * Un paso que no aplica a este tipo de entrega no debe figurar: a quien
+     * recoge en tienda no le sirve ver "En camino" esperando para siempre.
+     * Se deja igual si es el estado actual, para no ocultar donde esta.
+     */
+    .filter(
+      (s) =>
+        !s.appliesTo?.length ||
+        s.appliesTo.includes(order.type) ||
+        s._id.toString() === currentId,
+    )
     .map((s) => {
       const id = s._id.toString();
       return {

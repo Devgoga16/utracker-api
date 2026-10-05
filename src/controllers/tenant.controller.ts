@@ -42,7 +42,7 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl, phone, brandColor, schedule, deliveryTypes, deliveryFranjas, paymentMethods } =
+  const { name, logoUrl, phone, brandColor, schedule, deliveryTypes, deliveryFranjas, paymentMethods, lowStockThreshold } =
     req.body as {
       name?: string;
       logoUrl?: string | null;
@@ -52,6 +52,7 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
       deliveryTypes?: string[];
       deliveryFranjas?: string[];
       paymentMethods?: { name?: string; details?: string; qrImageUrl?: string }[];
+      lowStockThreshold?: number;
     };
 
   const tenant = await Tenant.findById(req.auth.tenantId);
@@ -89,6 +90,10 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
     const allowed = ['morning', 'afternoon', 'evening'];
     const clean = [...new Set(deliveryFranjas)].filter((f) => allowed.includes(f));
     tenant.deliveryFranjas = clean as ('morning' | 'afternoon' | 'evening')[];
+  }
+
+  if (lowStockThreshold !== undefined) {
+    tenant.lowStockThreshold = Math.max(0, Math.floor(Number(lowStockThreshold) || 0));
   }
 
   if (paymentMethods !== undefined) {

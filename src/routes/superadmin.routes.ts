@@ -11,13 +11,15 @@ import {
   assignSubscription,
   toggleSubscription,
   deleteTenant,
+  setTenantWhatsapp,
+  getTenantWhatsapp,
 } from '../controllers/superadmin.controller';
 import {
   listAllBills,
   generateMonthlyBills,
   updateBill,
 } from '../controllers/billing.controller';
-import { whatsappStatus, whatsappTest } from '../controllers/whatsapp.controller';
+import { whatsappConfig, whatsappTest } from '../controllers/whatsapp.controller';
 
 export const superadminRoutes = Router();
 
@@ -33,6 +35,9 @@ superadminRoutes.delete('/plans/:id', deletePlan);
 superadminRoutes.get('/tenants', listTenants);
 superadminRoutes.patch('/tenants/:id/subscription', assignSubscription);
 superadminRoutes.patch('/tenants/:id/toggle', toggleSubscription);
+// Sesion de WhatsApp del negocio: propia o la compartida de uTracker.
+superadminRoutes.get('/tenants/:id/whatsapp', getTenantWhatsapp);
+superadminRoutes.patch('/tenants/:id/whatsapp', setTenantWhatsapp);
 // Irreversible y en cascada: exige el nombre del negocio en el body.
 superadminRoutes.delete('/tenants/:id', deleteTenant);
 
@@ -41,5 +46,5 @@ superadminRoutes.post('/bills/generate', generateMonthlyBills);
 superadminRoutes.patch('/bills/:id', updateBill);
 
 // El navegador nunca habla con el bot: la API key se queda acá.
-superadminRoutes.get('/whatsapp/status', whatsappStatus);
+superadminRoutes.get('/whatsapp/config', whatsappConfig);
 superadminRoutes.post('/whatsapp/test', whatsappTest);

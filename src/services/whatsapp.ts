@@ -1,29 +1,122 @@
-import { env, isWhatsappConfigured } from '../config/env';
+import { env } from '../config/env';
+import { Tenant } from '../models/Tenant';
 
 /** Solo advierte una vez por arranque: si no, ensucia el log en cada pedido. */
 let warnedMissingConfig = false;
 
 /**
+ * Corte duro para el bot.
+ *
+ * Se midio en produccion que un envio puede quedarse colgado en vez de fallar
+ * rapido. Sin este corte, una notificacion lenta deja esperando a quien hizo
+ * el pedido, que es justo lo que no debe pasar con un aviso secundario.
+ */
+const SEND_TIMEOUT_MS = 12_000;
+
+/**
+ * Codigo de pais que se antepone a los numeros locales.
+ *
+ * Configurable porque uTracker no es solo de Peru, pero con 51 por defecto:
+ * es de donde son hoy todos los negocios.
+ */
+const COUNTRY_CODE = process.env.WHATSAPP_COUNTRY_CODE?.replace(/\D/g, '') || '51';
+
+/** Largo de un celular peruano sin codigo de pais. */
+const LOCAL_LENGTH = 9;
+
+/**
+ * Deja el numero como lo espera el bot: solo digitos y con codigo de pais.
+ *
+ * Los clientes escriben su celular como lo dicen —"987 654 321"— y asi se
+ * guarda. Normalizar al enviar, y no al guardar, arregla de una vez todos los
+ * numeros que ya estan en la base sin tener que migrarlos.
+ */
+export function normalizePhone(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+
+  // "0" inicial de marcacion nacional: no va en formato internacional.
+  if (digits.length === LOCAL_LENGTH + 1 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  // Un celular local pelado necesita el codigo de pais para que el bot resuelva.
+  if (digits.length === LOCAL_LENGTH) return `${COUNTRY_CODE}${digits}`;
+
+  // Cualquier otro largo ya trae su codigo (propio o extranjero): no se toca.
+  return digits;
+}
+
+/**
+ * A que sesion de WhatsApp mandar.
+ *
+ * Cada negocio puede tener la suya —manda desde su propio numero, cuesta mas—
+ * o caer al bot compartido de uTracker. Lo elige el superadmin por negocio.
+ */
+export interface WhatsappSession {
+  sendUrl: string;
+  apiKey: string;
+}
+
+/** La sesion propia del negocio, o la compartida, o nada. */
+export function resolveSession(tenant?: {
+  whatsapp?: { sendUrl?: string; apiKey?: string } | null;
+} | null): WhatsappSession | null {
+  const own = tenant?.whatsapp;
+  if (own?.sendUrl && own?.apiKey) {
+    return { sendUrl: own.sendUrl, apiKey: own.apiKey };
+  }
+  if (env.whatsapp.sendUrl && env.whatsapp.apiKey) {
+    return { sendUrl: env.whatsapp.sendUrl, apiKey: env.whatsapp.apiKey };
+  }
+  return null;
+}
+
+/**
+ * Carga la sesion de un negocio por id.
+ *
+ * Hace falta porque `whatsapp` esta marcado `select: false` en el modelo: no
+ * viaja en las consultas normales justamente para que la apiKey no se escape
+ * por una respuesta cualquiera.
+ */
+export async function sessionForTenant(tenantId: unknown): Promise<WhatsappSession | null> {
+  const tenant = await Tenant.findById(tenantId).select('+whatsapp').lean();
+  return resolveSession(tenant as { whatsapp?: { sendUrl?: string; apiKey?: string } } | null);
+}
+
+/**
  * Envia de verdad y lanza si algo falla. Lo usan el envio best-effort y el
  * boton de prueba del panel, que si necesita ver el error.
  */
-export async function sendWhatsappOrThrow(to: string, message: string): Promise<void> {
-  if (!isWhatsappConfigured()) {
-    throw new Error('El bot de WhatsApp no está configurado en el servidor.');
+export async function sendWhatsappOrThrow(
+  to: string,
+  message: string,
+  session?: WhatsappSession | null,
+): Promise<void> {
+  const target = session ?? resolveSession(null);
+  if (!target) {
+    throw new Error('No hay una sesión de WhatsApp configurada para este negocio.');
   }
 
-  // El bot espera solo dígitos y le pone el código de país si falta.
-  const number = to.replace(/\D/g, '');
+  const number = normalizePhone(to);
   if (!number) throw new Error('El número de destino está vacío.');
 
-  const res = await fetch(`${env.whatsapp.apiUrl}/api/whatsapp/send`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.whatsapp.apiKey!,
-    },
-    body: JSON.stringify({ to: number, message }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(target.sendUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${target.apiKey}`,
+      },
+      body: JSON.stringify({ to: number, text: message }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new Error('El bot de WhatsApp no respondió a tiempo.');
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -32,70 +125,36 @@ export async function sendWhatsappOrThrow(to: string, message: string): Promise<
 }
 
 /**
- * Manda un mensaje por el bot de WhatsApp. Nunca lanza: una notificación que
- * falla no debe tumbar el cambio de estado ni el alta del pedido.
+ * Manda un mensaje. Nunca lanza: una notificación que falla no debe tumbar el
+ * cambio de estado ni el alta del pedido.
  */
-export async function sendWhatsappMessage(to: string, message: string): Promise<void> {
-  if (!isWhatsappConfigured()) {
+export async function sendWhatsappMessage(
+  to: string,
+  message: string,
+  session?: WhatsappSession | null,
+): Promise<void> {
+  const target = session ?? resolveSession(null);
+  if (!target) {
     if (!warnedMissingConfig) {
       warnedMissingConfig = true;
       console.warn(
-        '[WhatsApp] WHATSAPP_API_URL / WHATSAPP_API_KEY no configurados: no se enviarán notificaciones.',
+        '[WhatsApp] Sin sesión configurada (WHATSAPP_SEND_URL / WHATSAPP_API_KEY): no se enviarán notificaciones.',
       );
     }
     return;
   }
 
   try {
-    await sendWhatsappOrThrow(to, message);
+    await sendWhatsappOrThrow(to, message, target);
   } catch (err) {
     // El bot puede estar caído o desconectado del celular: se registra y sigue.
     console.error(`[WhatsApp] No se pudo enviar a ${to}:`, err);
   }
 }
 
-export type WaStatus = 'connected' | 'open' | 'connecting' | 'reconnecting' | 'close' | 'qr';
-
-export interface WaStatusResult {
-  status: WaStatus;
-  connected: boolean;
-  /** data:image/png;base64,… mientras el bot espera que escaneen el QR. */
-  qr?: string | null;
-  phone?: { number: string; name: string };
-  /** false cuando faltan las variables de entorno del bot. */
-  configured: boolean;
-}
-
-/**
- * Estado del bot, para la pantalla de superadmin.
- *
- * Vive en el servidor a proposito: la API key no puede viajar al navegador,
- * y de paso el llamado es servidor a servidor, sin CORS de por medio.
- */
-export async function getWhatsappStatus(): Promise<WaStatusResult> {
-  if (!isWhatsappConfigured()) {
-    return { status: 'close', connected: false, qr: null, configured: false };
-  }
-
-  const res = await fetch(`${env.whatsapp.apiUrl}/api/whatsapp/status`, {
-    headers: { accept: 'application/json', 'x-api-key': env.whatsapp.apiKey! },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`El bot respondio ${res.status}. ${body}`.trim());
-  }
-
-  const json = (await res.json()) as { data?: Partial<WaStatusResult> };
-  const data = json.data ?? {};
-
-  return {
-    status: (data.status as WaStatus) ?? 'close',
-    connected: Boolean(data.connected),
-    qr: data.qr ?? null,
-    phone: data.phone,
-    configured: true,
-  };
+/** Si el bot compartido de uTracker tiene URL y llave. */
+export function isSharedBotConfigured(): boolean {
+  return Boolean(env.whatsapp.sendUrl && env.whatsapp.apiKey);
 }
 
 interface OrderLine {
@@ -112,6 +171,7 @@ export function notifyOwnerNewOrder(opts: {
   items: OrderLine[];
   total: number;
   source?: string; // 'campaña: X', 'link de pedido', etc.
+  session?: WhatsappSession | null;
 }): void {
   const { ownerPhone, customerName, customerPhone, items, total, source } = opts;
 
@@ -124,7 +184,7 @@ export function notifyOwnerNewOrder(opts: {
     `*Total: S/ ${total.toFixed(2)}*`,
   ].join('\n');
 
-  void sendWhatsappMessage(ownerPhone, lines);
+  void sendWhatsappMessage(ownerPhone, lines, opts.session);
 }
 
 const FRANJA_LABEL: Record<string, string> = {
@@ -159,9 +219,10 @@ export function notifyCustomerNewOrder(opts: {
   /** Adelanto que dejó pagado, si el pedido lo pedía. */
   advance?: { amount: number; validated: boolean };
   delivery?: { type: string; address?: string };
-  scheduledFor?: { date: string; franja: string };
+  scheduledFor?: { date: string; franja?: string };
   /** 'campaña: Helados' o similar, para ubicar al cliente. */
   source?: string;
+  session?: WhatsappSession | null;
 }): void {
   const {
     customerPhone,
@@ -204,8 +265,10 @@ export function notifyCustomerNewOrder(opts: {
   }
 
   if (scheduledFor?.date) {
-    const franja = FRANJA_LABEL[scheduledFor.franja] ?? scheduledFor.franja;
-    parts.push(`🗓 ${spanishDate(scheduledFor.date)} · ${franja}`);
+    const franja = scheduledFor.franja
+      ? ` · ${FRANJA_LABEL[scheduledFor.franja] ?? scheduledFor.franja}`
+      : '';
+    parts.push(`🗓 ${spanishDate(scheduledFor.date)}${franja}`);
   }
 
   if (trackingToken) {
@@ -224,6 +287,7 @@ export function notifyCustomerPaymentValidated(opts: {
   amount: number;
   orderCode: string;
   trackingToken?: string;
+  session?: WhatsappSession | null;
 }): void {
   const { customerPhone, customerName, businessName, amount, orderCode, trackingToken } = opts;
 
@@ -254,6 +318,7 @@ export function notifyCustomerPaymentRejected(opts: {
   amount: number;
   orderCode: string;
   trackingToken?: string;
+  session?: WhatsappSession | null;
 }): void {
   const { customerPhone, customerName, businessName, amount, orderCode, trackingToken } = opts;
 
@@ -278,6 +343,7 @@ export function notifyCustomerStateChange(opts: {
   customerName: string;
   stateName: string;
   trackingToken?: string;
+  session?: WhatsappSession | null;
 }): void {
   const { customerPhone, customerName, stateName, trackingToken } = opts;
 

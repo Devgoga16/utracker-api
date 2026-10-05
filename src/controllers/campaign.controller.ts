@@ -9,7 +9,11 @@ import { Customer } from '../models/Customer';
 import { WorkflowState } from '../models/WorkflowState';
 import { Tenant } from '../models/Tenant';
 import { env } from '../config/env';
-import { notifyOwnerNewOrder, notifyCustomerNewOrder } from '../services/whatsapp';
+import {
+  notifyOwnerNewOrder,
+  notifyCustomerNewOrder,
+  sessionForTenant,
+} from '../services/whatsapp';
 
 function generateToken(): string {
   return crypto.randomBytes(8).toString('hex');
@@ -206,6 +210,11 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
     throw ApiError.badRequest('Nombre y teléfono del cliente son requeridos');
   }
   if (!orderItems?.length) throw ApiError.badRequest('Debes seleccionar al menos un producto');
+  // El calendario depende de esto: un pedido sin fecha no se puede planificar.
+  if (!scheduledFor?.date) {
+    throw ApiError.badRequest('Indica la fecha de entrega o recojo');
+  }
+
 
   const resolvedType = type || 'pickup';
   if (!campaign.deliveryTypes.includes(resolvedType as any)) {
@@ -310,6 +319,7 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
   const populated = await Order.findById((order as any)._id).populate('customer');
 
   const ownerTenant = await Tenant.findById(campaign.tenant).select('name phone').lean();
+  const session = await sessionForTenant(campaign.tenant);
   const notifyItems = orderLines.map((l) => ({
     name: l.name,
     quantity: l.quantity,
@@ -324,6 +334,7 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
       items: notifyItems,
       total: totalAmount,
       source: `campaña: ${campaign.name}`,
+      session,
     });
   }
 
@@ -338,6 +349,7 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
     delivery: { type: resolvedType, address },
     scheduledFor,
     source: campaign.name,
+    session,
   });
 
   res.status(201).json({

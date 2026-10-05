@@ -43,13 +43,62 @@ async function sanitizeAttributes(
   return out;
 }
 
+/**
+ * Mantiene el filtro al día con las variantes del producto.
+ *
+ * Agrega al filtro los nombres que falten y devuelve el atributo que le
+ * corresponde al producto. Así el dueño escribe "S, M, L" una sola vez en las
+ * variantes y el filtro queda poblado y asignado solo.
+ */
+async function syncVariantFilter(
+  tenantId: string,
+  filterId: string,
+  variants: { name?: string }[] | undefined,
+): Promise<AttributeInput | null> {
+  const names = Array.from(
+    new Set((variants ?? []).map((v) => String(v?.name ?? '').trim()).filter(Boolean)),
+  );
+  if (!names.length) return null;
+
+  const filter = await ProductFilter.findOne({ _id: filterId, tenant: tenantId });
+  if (!filter) return null;
+
+  const missing = names.filter(
+    (n) => !filter.values.some((v) => v.toLowerCase() === n.toLowerCase()),
+  );
+  if (missing.length) {
+    filter.values = [...filter.values, ...missing];
+    await filter.save();
+  }
+
+  // Se usan los valores del filtro, para respetar su mayúscula/minúscula.
+  const canonical = names.map(
+    (n) => filter.values.find((v) => v.toLowerCase() === n.toLowerCase()) ?? n,
+  );
+  return { filter: filter._id.toString(), values: canonical };
+}
+
+/** Mezcla el atributo derivado de variantes con los elegidos a mano. */
+function mergeAttributes(
+  base: AttributeInput[] | undefined,
+  derived: AttributeInput | null,
+): AttributeInput[] | undefined {
+  if (!derived) return base;
+  const rest = (base ?? []).filter((a) => a.filter !== derived.filter);
+  return [...rest, derived];
+}
+
 export const createProduct = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const {
     kind, pricingMode, name, description, price, images, category, attributes, variants, stock, trackStock,
-    requiresAdvance, advanceType, advanceValue, preparationDays,
+    requiresAdvance, advanceType, advanceValue, preparationDays, lowStockThreshold, variantFilter,
   } = req.body;
   if (!name || price === undefined) throw ApiError.badRequest('name and price are required');
+
+  const derived = variantFilter
+    ? await syncVariantFilter(req.auth.tenantId, variantFilter, variants)
+    : null;
 
   const product = await Product.create({
     tenant: req.auth.tenantId,
@@ -60,13 +109,16 @@ export const createProduct = asyncHandler(async (req: Request, res: Response) =>
     price,
     images,
     category,
-    attributes: (await sanitizeAttributes(attributes, req.auth.tenantId)) ?? [],
+    attributes:
+      mergeAttributes(await sanitizeAttributes(attributes, req.auth.tenantId), derived) ?? [],
     variants,
+    variantFilter: variantFilter || undefined,
     preparationDays,
     requiresAdvance,
     advanceType,
     advanceValue,
     stock,
+    lowStockThreshold,
     // Services have nothing to count.
     trackStock: kind === 'service' ? false : trackStock,
   });
@@ -91,7 +143,7 @@ export const updateProduct = asyncHandler(async (req: Request, res: Response) =>
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const {
     kind, pricingMode, name, description, price, images, category, attributes, variants, stock, trackStock,
-    requiresAdvance, advanceType, advanceValue, preparationDays,
+    requiresAdvance, advanceType, advanceValue, preparationDays, lowStockThreshold, variantFilter,
   } = req.body;
   const patch: Record<string, unknown> = {};
   if (kind !== undefined) patch.kind = kind;
@@ -101,10 +153,24 @@ export const updateProduct = asyncHandler(async (req: Request, res: Response) =>
   if (price !== undefined) patch.price = price;
   if (images !== undefined) patch.images = images;
   if (category !== undefined) patch.category = category;
-  if (attributes !== undefined) {
-    patch.attributes = await sanitizeAttributes(attributes, req.auth.tenantId);
-  }
   if (variants !== undefined) patch.variants = variants;
+  if (variantFilter !== undefined) patch.variantFilter = variantFilter || undefined;
+
+  if (attributes !== undefined || variantFilter) {
+    const derived = variantFilter
+      ? await syncVariantFilter(req.auth.tenantId, variantFilter, variants)
+      : null;
+    patch.attributes = mergeAttributes(
+      await sanitizeAttributes(attributes, req.auth.tenantId),
+      derived,
+    );
+  }
+  if (lowStockThreshold !== undefined) {
+    patch.lowStockThreshold =
+      lowStockThreshold === null || lowStockThreshold === ''
+        ? undefined
+        : Math.max(0, Math.floor(Number(lowStockThreshold) || 0));
+  }
   if (preparationDays !== undefined) {
     patch.preparationDays = Math.max(0, Math.floor(Number(preparationDays) || 0));
   }

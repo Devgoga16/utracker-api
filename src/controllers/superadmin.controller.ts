@@ -254,3 +254,53 @@ export const deleteTenant = asyncHandler(async (req: Request, res: Response) => 
     },
   });
 });
+
+/**
+ * PATCH /superadmin/tenants/:id/whatsapp
+ *
+ * Define si el negocio manda por su propia sesion o por el bot compartido.
+ * Lo decide el superadmin tras acordarlo con el dueno: una sesion propia
+ * manda desde el numero del negocio pero cuesta mas.
+ */
+export const setTenantWhatsapp = asyncHandler(async (req: Request, res: Response) => {
+  const { sendUrl, apiKey } = req.body as { sendUrl?: string | null; apiKey?: string | null };
+
+  const tenant = await Tenant.findById(req.params.id).select('+whatsapp');
+  if (!tenant) throw ApiError.notFound('Negocio no encontrado');
+
+  const url = sendUrl?.trim() ?? '';
+  const key = apiKey?.trim() ?? '';
+
+  // Vaciar ambos = volver al bot compartido de uTracker.
+  if (!url && !key) {
+    tenant.whatsapp = undefined;
+    await tenant.save();
+    return res.json({ mode: 'shared' });
+  }
+
+  // Media configuracion no sirve y falla recien al intentar enviar.
+  if (!url || !key) {
+    throw ApiError.badRequest('Para una sesión propia hacen falta la URL y la API key');
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    throw ApiError.badRequest('La URL debe empezar con http:// o https://');
+  }
+
+  tenant.whatsapp = { sendUrl: url, apiKey: key };
+  await tenant.save();
+
+  // La key no vuelve nunca: solo su cola, para reconocerla de un vistazo.
+  res.json({ mode: 'own', sendUrl: url, keyHint: key.slice(-6) });
+});
+
+/** GET /superadmin/tenants/:id/whatsapp — sin exponer la key completa. */
+export const getTenantWhatsapp = asyncHandler(async (req: Request, res: Response) => {
+  const tenant = await Tenant.findById(req.params.id).select('+whatsapp name').lean();
+  if (!tenant) throw ApiError.notFound('Negocio no encontrado');
+
+  const own = tenant.whatsapp;
+  if (!own?.sendUrl || !own?.apiKey) {
+    return res.json({ mode: 'shared', sendUrl: null, keyHint: null });
+  }
+  res.json({ mode: 'own', sendUrl: own.sendUrl, keyHint: own.apiKey.slice(-6) });
+});

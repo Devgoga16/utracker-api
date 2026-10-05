@@ -207,5 +207,7 @@ const orderSchema = new Schema<IOrder>(
 
 orderSchema.index({ tenant: 1, createdAt: -1 });
 orderSchema.index({ tenant: 1, fulfillmentState: 1 });
+// El calendario consulta por rango de fecha programada.
+orderSchema.index({ tenant: 1, 'scheduledFor.date': 1 });
 
 export const Order = model<IOrder>('Order', orderSchema);

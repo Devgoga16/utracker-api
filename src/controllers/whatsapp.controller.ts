@@ -1,24 +1,34 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
-import { getWhatsappStatus, sendWhatsappOrThrow } from '../services/whatsapp';
+import { env } from '../config/env';
+import { isSharedBotConfigured, sendWhatsappOrThrow, sessionForTenant } from '../services/whatsapp';
 
-// GET /superadmin/whatsapp/status
-export const whatsappStatus = asyncHandler(async (_req: Request, res: Response) => {
-  try {
-    const data = await getWhatsappStatus();
-    res.json({ data });
-  } catch (err) {
-    // El bot caído no es un 500 nuestro: es una dependencia externa fuera de servicio.
-    throw ApiError.badGateway(
-      err instanceof Error ? err.message : 'No se pudo contactar al bot de WhatsApp.',
-    );
-  }
+/**
+ * GET /superadmin/whatsapp/config
+ *
+ * Estado del bot COMPARTIDO. No consulta al bot: la sesion se administra por
+ * fuera de uTracker y su API no expone estado ni QR. Lo unico que podemos
+ * afirmar es si tenemos credenciales; si funcionan, lo dice el envio de prueba.
+ */
+export const whatsappConfig = asyncHandler(async (_req: Request, res: Response) => {
+  const url = env.whatsapp.sendUrl ?? null;
+  res.json({
+    configured: isSharedBotConfigured(),
+    // La URL lleva la sesion, no es secreta; la llave nunca sale.
+    sendUrl: url,
+    hasKey: Boolean(env.whatsapp.apiKey),
+  });
 });
 
 // POST /superadmin/whatsapp/test  { to, message? }
 export const whatsappTest = asyncHandler(async (req: Request, res: Response) => {
-  const { to, message } = req.body as { to?: string; message?: string };
+  const { to, message, tenantId } = req.body as {
+    to?: string;
+    message?: string;
+    /** Para probar la sesion propia de un negocio; sin esto, la compartida. */
+    tenantId?: string;
+  };
 
   const number = to?.replace(/\D/g, '') ?? '';
   if (!number) throw ApiError.badRequest('Indica el número de destino.');
@@ -29,7 +39,8 @@ export const whatsappTest = asyncHandler(async (req: Request, res: Response) => 
   const text = message?.trim() || 'Mensaje de prueba desde uTracker. Si lo lees, todo funciona.';
 
   try {
-    await sendWhatsappOrThrow(number, text);
+    const session = tenantId ? await sessionForTenant(tenantId) : undefined;
+    await sendWhatsappOrThrow(number, text, session);
   } catch (err) {
     throw ApiError.badGateway(
       err instanceof Error ? err.message : 'No se pudo enviar el mensaje.',

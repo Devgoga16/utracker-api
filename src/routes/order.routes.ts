@@ -8,6 +8,7 @@ import {
   deletePayment,
   getOrder,
   listOrders,
+  calendarOrders,
   registerPayment,
   updateOrderState,
   validatePayment,
@@ -19,6 +20,8 @@ export const orderRoutes = Router();
 orderRoutes.use(requireAuth, requireTenant);
 orderRoutes.post('/', checkLimit('orders'), createOrder);
 orderRoutes.get('/', listOrders);
+// Antes de '/:id' o 'calendar' se interpretaria como un id.
+orderRoutes.get('/calendar', calendarOrders);
 orderRoutes.get('/:id', getOrder);
 orderRoutes.delete('/:id', deleteOrder);
 orderRoutes.patch('/:id/state', updateOrderState);

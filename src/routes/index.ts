@@ -15,6 +15,8 @@ import { superadminRoutes } from './superadmin.routes';
 import { subscriptionRoutes } from './subscription.routes';
 import { billingRoutes } from './billing.routes';
 import { campaignRoutes } from './campaign.routes';
+import { storefrontRoutes } from './storefront.routes';
+import { storeKeyRoutes } from './storeKey.routes';
 
 export const router = Router();
 
@@ -34,3 +36,6 @@ router.use('/superadmin', superadminRoutes);
 router.use('/subscription', subscriptionRoutes);
 router.use('/billing', billingRoutes);
 router.use('/campaigns', campaignRoutes);
+// API publica para webs externas; su propio CORS, abierto.
+router.use('/storefront', storefrontRoutes);
+router.use('/store-keys', storeKeyRoutes);

@@ -36,6 +36,14 @@ export interface IProduct {
   attributes: IProductAttribute[];
   variants: IProductVariant[];
   /**
+   * Filtro al que corresponden las variantes de este producto.
+   *
+   * Con esto, "S, M, L" se escribe una sola vez: al guardar, esos nombres se
+   * agregan al filtro y quedan asignados al producto. Sin esto habria que
+   * cargar la misma lista dos veces y mantenerlas sincronizadas a mano.
+   */
+  variantFilter?: Types.ObjectId;
+  /**
    * Dias que toma tenerlo listo. 0 = disponible para recojo inmediato.
    * Fija la fecha mas temprana que el cliente puede elegir al pedirlo.
    */
@@ -47,6 +55,11 @@ export interface IProduct {
   advanceValue: number;
   stock?: number;
   trackStock: boolean;
+  /**
+   * Desde cuantas unidades avisar. Sin valor propio se usa el del negocio:
+   * 5 unidades no significan lo mismo en una floreria que en una bodega.
+   */
+  lowStockThreshold?: number;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -80,12 +93,14 @@ const productSchema = new Schema<IProduct>(
     category: { type: String },
     attributes: { type: [attributeSchema], default: [] },
     variants: { type: [variantSchema], default: [] },
+    variantFilter: { type: Schema.Types.ObjectId, ref: 'ProductFilter' },
     preparationDays: { type: Number, default: 0, min: 0 },
     requiresAdvance: { type: Boolean, default: false },
     advanceType: { type: String, enum: ['fixed', 'percent'], default: 'percent' },
     advanceValue: { type: Number, default: 50, min: 0 },
     stock: { type: Number },
     trackStock: { type: Boolean, default: false },
+    lowStockThreshold: { type: Number, min: 0 },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

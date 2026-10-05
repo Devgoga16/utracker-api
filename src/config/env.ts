@@ -59,7 +59,11 @@ export const env = {
 
   // Opcional igual que R2: sin esto la API arranca, solo no manda WhatsApp.
   whatsapp: {
-    apiUrl: process.env.WHATSAPP_API_URL?.replace(/\/$/, ''),
+    /**
+     * URL completa de envio del bot compartido, con su sesion incluida.
+     * Es el valor por defecto para los negocios sin sesion propia.
+     */
+    sendUrl: process.env.WHATSAPP_SEND_URL?.trim(),
     apiKey: process.env.WHATSAPP_API_KEY,
   },
 };
@@ -70,7 +74,7 @@ export function isStorageConfigured(): boolean {
 }
 
 export function isWhatsappConfigured(): boolean {
-  return Boolean(env.whatsapp.apiUrl && env.whatsapp.apiKey);
+  return Boolean(env.whatsapp.sendUrl && env.whatsapp.apiKey);
 }
 
 /**

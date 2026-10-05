@@ -36,6 +36,20 @@ export interface ITenant {
   deliveryFranjas?: ('morning' | 'afternoon' | 'evening')[];
   /** Donde pagar el adelanto. Sin esto no se puede pedir comprobante. */
   paymentMethods?: IPaymentMethod[];
+  /** Umbral por defecto de stock bajo, para productos sin uno propio. */
+  lowStockThreshold?: number;
+  /**
+   * Sesion propia de WhatsApp. Vacio = usa el bot compartido de uTracker.
+   *
+   * Lo configura el superadmin tras acordarlo con el negocio: una sesion
+   * propia cuesta mas pero manda desde el numero del negocio.
+   *
+   * `apiKey` es secreto: no sale en ninguna respuesta al dueno ni al publico.
+   */
+  whatsapp?: {
+    sendUrl?: string;
+    apiKey?: string;
+  };
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -78,6 +92,18 @@ const tenantSchema = new Schema<ITenant>(
         ),
       ],
       default: [],
+    },
+    lowStockThreshold: { type: Number, default: 5, min: 0 },
+    whatsapp: {
+      type: new Schema(
+        {
+          sendUrl: { type: String, trim: true },
+          apiKey: { type: String, trim: true },
+        },
+        { _id: false },
+      ),
+      // `select: false` para que no viaje por accidente en consultas generales.
+      select: false,
     },
     isActive: { type: Boolean, default: true },
   },

@@ -10,11 +10,13 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
 import { orderCode } from '../utils/orderCode';
+import { checkLowStock } from '../services/stockAlerts';
 import { deleteByUrl } from '../services/storage';
 import {
   notifyCustomerStateChange,
   notifyCustomerPaymentValidated,
   notifyCustomerPaymentRejected,
+  sessionForTenant,
 } from '../services/whatsapp';
 import { StockMovement } from '../models/StockMovement';
 
@@ -144,6 +146,11 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
   };
 
   if (!customerInput?.name || !customerInput?.phone) throw ApiError.badRequest('customer.name and customer.phone are required');
+  // El calendario depende de esto: un pedido sin fecha no se puede planificar.
+  if (!scheduledFor?.date) {
+    throw ApiError.badRequest('Indica la fecha de entrega o recojo');
+  }
+
   if (!itemsInput?.length) throw ApiError.badRequest('At least one item is required');
   if (!type) throw ApiError.badRequest('type is required');
 
@@ -257,6 +264,56 @@ export const listOrders = asyncHandler(async (req: Request, res: Response) => {
   res.json({ orders });
 });
 
+/**
+ * GET /orders/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * Los pedidos de una semana segun su fecha programada de entrega o recojo,
+ * que es lo que el negocio necesita planificar: no cuando entro el pedido,
+ * sino cuando hay que tenerlo listo.
+ */
+export const calendarOrders = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.auth?.tenantId) throw ApiError.unauthorized();
+
+  const { from, to } = req.query as { from?: string; to?: string };
+  const isDate = (v?: string) => Boolean(v && /^\d{4}-\d{2}-\d{2}$/.test(v));
+  if (!isDate(from) || !isDate(to)) {
+    throw ApiError.badRequest('Indica from y to con formato YYYY-MM-DD');
+  }
+
+  /**
+   * Comparacion de texto: las fechas se guardan como "2026-10-08", sin hora ni
+   * zona. Pasarlas por Date solo abriria la puerta a corrimientos de un dia.
+   */
+  const scheduled = await Order.find({
+    tenant: req.auth.tenantId,
+    'scheduledFor.date': { $gte: from, $lte: to },
+  })
+    .sort({ 'scheduledFor.date': 1, createdAt: 1 })
+    .populate('customer fulfillmentState paymentState');
+
+  /**
+   * Los pedidos sin fecha tambien hay que atenderlos, pero no caen en ningun
+   * dia. Se devuelven aparte y solo los que siguen abiertos: uno ya entregado
+   * sin fecha no aporta nada a la planificacion.
+   */
+  const closedStates = await WorkflowState.find({
+    tenant: req.auth.tenantId,
+    kind: 'fulfillment',
+    $or: [{ isFinal: true }, { isCancellation: true }],
+  }).select('_id');
+
+  const unscheduled = await Order.find({
+    tenant: req.auth.tenantId,
+    scheduledFor: { $exists: false },
+    fulfillmentState: { $nin: closedStates.map((s) => s._id) },
+  })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .populate('customer fulfillmentState paymentState');
+
+  res.json({ scheduled, unscheduled });
+});
+
 export const getOrder = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   // stateHistory carries its own frozen display data, so it needs no populate.
@@ -297,9 +354,10 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
         }).select('_id');
         const trackedSet = new Set(tracked.map((p) => p._id.toString()));
 
+        const deducted = productItems.filter((i) => trackedSet.has(i.product!.toString()));
+
         await Promise.all(
-          productItems
-            .filter((i) => trackedSet.has(i.product!.toString()))
+          deducted
             .map((i) =>
               Promise.all([
                 Product.updateOne({ _id: i.product }, { $inc: { stock: -i.quantity } }),
@@ -313,6 +371,11 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
                 }),
               ])
             )
+        );
+        // Después del descuento: avisa solo si alguno cruzó su umbral.
+        void checkLowStock(
+          req.auth.tenantId,
+          deducted.map((i) => ({ productId: i.product!.toString(), soldUnits: i.quantity })),
         );
       }
       // Volvió a descontar: si estaba devuelto, ya no lo está.
@@ -356,13 +419,17 @@ export const updateOrderState = asyncHandler(async (req: Request, res: Response)
 
   // Notificación al cliente (best-effort: no bloquea ni rompe la respuesta).
   if (state.notifyCustomer) {
-    const customer = await Customer.findById(order.customer).select('name phone').lean();
+    const [customer, session] = await Promise.all([
+      Customer.findById(order.customer).select('name phone').lean(),
+      sessionForTenant(req.auth.tenantId),
+    ]);
     if (customer?.phone) {
       notifyCustomerStateChange({
         customerPhone: customer.phone,
         customerName: customer.name,
         stateName: state.name,
         trackingToken: order.trackingToken,
+        session,
       });
     }
   }
@@ -446,9 +513,10 @@ export const validatePayment = asyncHandler(async (req: Request, res: Response) 
   await order.save();
 
   // El cliente mandó su comprobante a ciegas: merece saber que fue aceptado.
-  const [customer, tenant] = await Promise.all([
+  const [customer, tenant, session] = await Promise.all([
     Customer.findById(order.customer).select('name phone').lean(),
     Tenant.findById(req.auth.tenantId).select('name').lean(),
+    sessionForTenant(req.auth.tenantId),
   ]);
   if (customer?.phone) {
     notifyCustomerPaymentValidated({
@@ -458,6 +526,7 @@ export const validatePayment = asyncHandler(async (req: Request, res: Response) 
       amount: payment.amount,
       orderCode: orderCode(order.trackingToken),
       trackingToken: order.trackingToken,
+      session,
     });
   }
 
@@ -500,9 +569,10 @@ export const deletePayment = asyncHandler(async (req: Request, res: Response) =>
     order.paymentRejectedAt = new Date();
     await order.save();
 
-    const [customer, tenant] = await Promise.all([
+    const [customer, tenant, session] = await Promise.all([
       Customer.findById(order.customer).select('name phone').lean(),
       Tenant.findById(req.auth.tenantId).select('name').lean(),
+      sessionForTenant(req.auth.tenantId),
     ]);
     if (customer?.phone) {
       notifyCustomerPaymentRejected({
@@ -512,6 +582,7 @@ export const deletePayment = asyncHandler(async (req: Request, res: Response) =>
         amount: removed.amount,
         orderCode: orderCode(order.trackingToken),
         trackingToken: order.trackingToken,
+        session,
       });
     }
   }

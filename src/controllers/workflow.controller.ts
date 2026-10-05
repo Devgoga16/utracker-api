@@ -16,13 +16,14 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const tenantId = req.auth.tenantId;
 
-  const { kind: rawKind, name, color, icon, notifyCustomer, deductsStock, allowedRoles } = req.body as {
+  const { kind: rawKind, name, color, icon, notifyCustomer, deductsStock, appliesTo, allowedRoles } = req.body as {
     kind: unknown;
     name?: string;
     color?: string;
     icon?: string;
     notifyCustomer?: boolean;
     deductsStock?: boolean;
+    appliesTo?: string[];
     allowedRoles?: MembershipRole[];
   };
 
@@ -43,6 +44,8 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
     isCancellation: false,
     notifyCustomer: notifyCustomer ?? false,
     deductsStock: kind === 'fulfillment' ? (deductsStock ?? false) : false,
+    // Solo tiene sentido en fulfillment: el pago no depende de como se entrega.
+    appliesTo: (kind === 'fulfillment' ? (appliesTo ?? []) : []) as never,
     allowedRoles: allowedRoles?.length ? allowedRoles : ['owner', 'admin'],
   });
 
@@ -56,7 +59,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   const state = await WorkflowState.findOne({ _id: req.params.id, tenant: tenantId });
   if (!state) throw ApiError.notFound('Estado no encontrado');
 
-  const { name, color, icon, isInitial, isFinal, notifyCustomer, vibrant, requiresLink, deductsStock, allowedRoles } = req.body as {
+  const { name, color, icon, isInitial, isFinal, notifyCustomer, vibrant, requiresLink, deductsStock, appliesTo, allowedRoles } = req.body as {
     name?: string;
     color?: string;
     icon?: string;
@@ -66,6 +69,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
     vibrant?: boolean;
     requiresLink?: boolean;
     deductsStock?: boolean;
+    appliesTo?: string[];
     allowedRoles?: MembershipRole[];
   };
 
@@ -79,6 +83,13 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   if (vibrant !== undefined) state.vibrant = vibrant;
   if (requiresLink !== undefined) state.requiresLink = requiresLink;
   if (deductsStock !== undefined) state.deductsStock = state.kind === 'fulfillment' ? deductsStock : false;
+  if (appliesTo !== undefined) {
+    const valid = ['pickup', 'delivery_third_party', 'delivery_own'];
+    const clean = [...new Set(appliesTo)].filter((t) => valid.includes(t));
+    // Marcarlos todos equivale a no restringir: se guarda vacio, que es lo mismo.
+    state.appliesTo =
+      state.kind === 'fulfillment' && clean.length < valid.length ? (clean as never) : [];
+  }
   if (allowedRoles !== undefined) {
     if (!allowedRoles.length) throw ApiError.badRequest('Al menos un rol debe poder mover el pedido a este estado');
     state.allowedRoles = allowedRoles;
