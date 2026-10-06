@@ -4,6 +4,39 @@ import { Order } from '../models/Order';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
+/**
+ * Arma el filtro de fecha segun el eje elegido.
+ *
+ * Por creacion responde "cuanto vendi"; por entrega, "cuanto entregue". Un
+ * pedido que entro en setiembre y se entrego en octubre pertenece a meses
+ * distintos segun lo que se quiera medir, y antes solo existia el primer eje:
+ * esos pedidos simplemente no aparecian donde el dueno los buscaba.
+ */
+function dateMatch(
+  basis: string | undefined,
+  from?: string,
+  to?: string,
+): Record<string, unknown> {
+  if (!from && !to) return {};
+
+  if (basis === 'scheduled') {
+    // Se guardan como "2026-10-08": comparacion de texto, sin zonas de por medio.
+    const range: Record<string, string> = {};
+    if (from) range.$gte = from;
+    if (to) range.$lte = to;
+    return { 'scheduledFor.date': range };
+  }
+
+  const range: Record<string, Date> = {};
+  if (from) range.$gte = new Date(from);
+  if (to) {
+    const end = new Date(to);
+    end.setHours(23, 59, 59, 999);
+    range.$lte = end;
+  }
+  return { createdAt: range };
+}
+
 export const getFinanceSummary = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const tenantId = new Types.ObjectId(req.auth.tenantId);
@@ -15,20 +48,12 @@ export const getFinanceSummary = asyncHandler(async (req: Request, res: Response
     paymentStateId,
     type,
     productId,
+    dateBasis,
   } = req.query as Record<string, string | undefined>;
 
   const match: Record<string, unknown> = { tenant: tenantId };
 
-  if (from || to) {
-    const dateFilter: Record<string, Date> = {};
-    if (from) dateFilter.$gte = new Date(from);
-    if (to) {
-      const end = new Date(to);
-      end.setHours(23, 59, 59, 999);
-      dateFilter.$lte = end;
-    }
-    match.createdAt = dateFilter;
-  }
+  Object.assign(match, dateMatch(dateBasis, from, to));
 
   if (fulfillmentStateId) match.fulfillmentState = new Types.ObjectId(fulfillmentStateId);
   if (paymentStateId) match.paymentState = new Types.ObjectId(paymentStateId);
@@ -44,7 +69,26 @@ export const getFinanceSummary = asyncHandler(async (req: Request, res: Response
             $group: {
               _id: null,
               totalRevenue: { $sum: '$totalAmount' },
-              totalCollected: { $sum: { $sum: '$payments.amount' } },
+              /**
+               * Solo pagos confirmados. Un comprobante que el cliente subio y
+               * nadie reviso no es dinero en caja: contarlo inflaria los
+               * ingresos con plata que podria no haber llegado.
+               */
+              totalCollected: {
+                $sum: {
+                  $sum: {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: { $ifNull: ['$payments', []] },
+                          cond: { $ne: ['$$this.validated', false] },
+                        },
+                      },
+                      in: '$$this.amount',
+                    },
+                  },
+                },
+              },
               orderCount: { $sum: 1 },
             },
           },
@@ -102,20 +146,12 @@ export const getFinanceOrders = asyncHandler(async (req: Request, res: Response)
     type,
     productId,
     page,
+    dateBasis,
   } = req.query as Record<string, string | undefined>;
 
   const match: Record<string, unknown> = { tenant: tenantId };
 
-  if (from || to) {
-    const dateFilter: Record<string, Date> = {};
-    if (from) dateFilter.$gte = new Date(from);
-    if (to) {
-      const end = new Date(to);
-      end.setHours(23, 59, 59, 999);
-      dateFilter.$lte = end;
-    }
-    match.createdAt = dateFilter;
-  }
+  Object.assign(match, dateMatch(dateBasis, from, to));
 
   if (fulfillmentStateId) match.fulfillmentState = new Types.ObjectId(fulfillmentStateId);
   if (paymentStateId) match.paymentState = new Types.ObjectId(paymentStateId);
