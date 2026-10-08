@@ -10,3 +10,6 @@ export * from './Plan';
 export * from './Subscription';
 export * from './Bill';
 export * from './Campaign';
+export * from './SystemLog';
+export * from './Ticket';
+export * from './SupportAccess';

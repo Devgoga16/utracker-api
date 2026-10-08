@@ -2,14 +2,45 @@ import { NextFunction, Request, Response } from 'express';
 import { MulterError } from 'multer';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
+import { logEvent } from '../services/systemLog';
 
 export function notFoundHandler(req: Request, res: Response) {
   res.status(404).json({ message: `Route not found: ${req.method} ${req.originalUrl}` });
 }
 
+/**
+ * Guarda el error en el visor de logs y devuelve el código con el que el
+ * usuario puede reportarlo.
+ *
+ * Solo se registran los 5xx: los 4xx son el sistema funcionando —validaciones,
+ * permisos, cosas que el usuario corrige solo— y llenarían el visor de ruido
+ * hasta volverlo inservible justo cuando hace falta buscar algo real.
+ */
+function recordServerError(err: unknown, req: Request, statusCode: number): string | undefined {
+  if (statusCode < 500) return undefined;
+
+  return logEvent({
+    level: 'error',
+    source: 'api',
+    statusCode,
+    message: err instanceof Error ? err.message : String(err),
+    action: `${req.method} ${req.originalUrl}`,
+    stack: err instanceof Error ? err.stack : undefined,
+    tenant: req.auth?.tenantId,
+    user: req.auth?.userId,
+    context: {
+      body: req.body,
+      query: req.query,
+      params: req.params,
+      support: req.auth?.support ? true : undefined,
+    },
+  });
+}
+
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof ApiError) {
-    return res.status(err.statusCode).json({ message: err.message });
+    const ref = recordServerError(err, req, err.statusCode);
+    return res.status(err.statusCode).json({ message: err.message, ref });
   }
 
   if (err instanceof Error && err.name === 'ValidationError') {
@@ -26,5 +57,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   console.error('[unhandled error]', err);
-  return res.status(500).json({ message: 'Internal server error' });
+  const ref = recordServerError(err, req, 500);
+  return res.status(500).json({
+    message: ref
+      ? `Ocurrió un error inesperado. Código de referencia: ${ref}`
+      : 'Internal server error',
+    ref,
+  });
 }

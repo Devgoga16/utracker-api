@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Tenant } from '../models/Tenant';
 import { Membership } from '../models/Membership';
+import { SupportAccess } from '../models/SupportAccess';
 import { WorkflowState } from '../models/WorkflowState';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -36,8 +37,38 @@ export const createTenant = asyncHandler(async (req: Request, res: Response) => 
 
 export const listMyTenants = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth) throw ApiError.unauthorized();
-  const memberships = await Membership.find({ user: req.auth.userId, isActive: true }).populate('tenant').lean();
-  res.json({ tenants: memberships.map((m) => ({ ...(m.tenant as unknown as Record<string, unknown>), role: m.role })) });
+
+  const [memberships, supportGrants] = await Promise.all([
+    Membership.find({ user: req.auth.userId, isActive: true }).populate('tenant').lean(),
+    // Los negocios a los que soporte entro temporalmente aparecen junto a los
+    // propios: sin esto el superadmin tiene el permiso pero no la puerta.
+    SupportAccess.find({
+      user: req.auth.userId,
+      revokedAt: { $exists: false },
+      expiresAt: { $gt: new Date() },
+    })
+      .populate('tenant')
+      .lean(),
+  ]);
+
+  const own = memberships.map((m) => ({
+    ...(m.tenant as unknown as Record<string, unknown>),
+    role: m.role,
+  }));
+  const ownIds = new Set(
+    memberships.map((m) => String((m.tenant as unknown as { _id?: unknown })?._id)),
+  );
+
+  const support = supportGrants
+    .filter((g) => g.tenant && !ownIds.has(String((g.tenant as unknown as { _id: unknown })._id)))
+    .map((g) => ({
+      ...(g.tenant as unknown as Record<string, unknown>),
+      role: 'owner' as const,
+      // El front lo usa para avisar que se esta viendo un negocio ajeno.
+      support: { canWrite: g.canWrite, expiresAt: g.expiresAt, reason: g.reason },
+    }));
+
+  res.json({ tenants: [...own, ...support] });
 });
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
