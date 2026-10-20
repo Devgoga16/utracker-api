@@ -89,14 +89,14 @@ async function main() {
   }
 
   if (unknown.length) {
-    console.log('\nSin mapear (quedan como están, elegí un icono desde la UI):');
+    console.log('\nSin mapear (quedan como están, elige un icono desde la UI):');
     for (const u of unknown) {
       console.log(`  [${u.tenant}] ${u.state.padEnd(18)} ${u.icon}`);
     }
   }
 
   if (!apply) {
-    console.log('\nDry run. Volvé a correr con --apply para escribir los cambios.');
+    console.log('\nDry run. Vuelve a correr con --apply para escribir los cambios.');
     await mongoose.disconnect();
     return;
   }

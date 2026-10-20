@@ -18,6 +18,9 @@ import { campaignRoutes } from './campaign.routes';
 import { storefrontRoutes } from './storefront.routes';
 import { storeKeyRoutes } from './storeKey.routes';
 import { logRoutes, ticketRoutes } from './ticket.routes';
+import { planRoutes } from './plan.routes';
+import { invitationRoutes, teamRoutes } from './team.routes';
+import { showcaseRoutes } from './showcase.routes';
 
 export const router = Router();
 
@@ -34,6 +37,13 @@ router.use('/product-filters', productFilterRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/finance', financeRoutes);
 router.use('/superadmin', superadminRoutes);
+// Planes y catalogo de funcionalidades: publicos, los lee la pagina de precios.
+router.use('/plans', planRoutes);
+// Equipo del negocio, y lo que abre el invitado (publico, por token).
+router.use('/team', teamRoutes);
+router.use('/invitations', invitationRoutes);
+// Socios que aceptaron aparecer en la web de uTracker (publico).
+router.use('/showcase', showcaseRoutes);
 router.use('/subscription', subscriptionRoutes);
 router.use('/billing', billingRoutes);
 router.use('/campaigns', campaignRoutes);

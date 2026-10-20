@@ -127,7 +127,7 @@ export const storefrontCampaigns = asyncHandler(async (req: Request, res: Respon
  * POST /storefront/checkout
  *
  * El tercero manda el carrito y recibe la URL de la pantalla de pago. El
- * precio se valida ya acá para que el error salga en su web, no después de
+ * precio se valida ya aquí para que el error salga en su web, no después de
  * haber mandado al cliente a otra pantalla.
  */
 export const createCheckoutSession = asyncHandler(async (req: Request, res: Response) => {

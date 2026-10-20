@@ -103,7 +103,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
     );
     state.isInitial = true;
   } else if (isInitial === false && state.isInitial) {
-    throw ApiError.badRequest('Marcá otro estado como inicial en lugar de desmarcar este');
+    throw ApiError.badRequest('Marca otro estado como inicial en lugar de desmarcar este');
   }
 
   if (isFinal !== undefined) {
@@ -128,7 +128,7 @@ export const deleteState = asyncHandler(async (req: Request, res: Response) => {
     throw ApiError.conflict('El estado de cancelación no se puede eliminar');
   }
   if (state.isInitial) {
-    throw ApiError.conflict('No podés eliminar el estado inicial. Marcá otro como inicial primero.');
+    throw ApiError.conflict('No puedes eliminar el estado inicial. Marca otro como inicial primero.');
   }
 
   // Orders sitting in this state would be left pointing at nothing.

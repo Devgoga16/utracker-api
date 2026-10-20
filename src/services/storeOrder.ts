@@ -67,7 +67,7 @@ export async function priceCart(tenantId: Types.ObjectId, itemsInput: StoreOrder
       throw ApiError.badRequest(`Cantidad inválida para "${product.name}"`);
     }
 
-    // El stock se valida acá aunque el descuento ocurra después, en el estado
+    // El stock se valida aquí aunque el descuento ocurra después, en el estado
     // del workflow que lo descuenta: así no se aceptan pedidos imposibles.
     if (product.trackStock && quantity > (product.stock ?? 0)) {
       throw ApiError.conflict(`Solo quedan ${product.stock ?? 0} unidades de "${product.name}"`);
@@ -105,7 +105,7 @@ export async function priceCart(tenantId: Types.ObjectId, itemsInput: StoreOrder
  * Crea un pedido desde cualquier vitrina pública: la tienda de uTracker o la
  * web de un tercero que use el storefront API.
  *
- * Vive acá y no en un controlador porque las dos entradas deben validar y
+ * Vive aquí y no en un controlador porque las dos entradas deben validar y
  * cobrar exactamente igual; si se duplicara, una de las dos se quedaría atrás.
  */
 export async function createPublicOrder(

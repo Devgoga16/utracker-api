@@ -50,6 +50,16 @@ export interface ITenant {
     sendUrl?: string;
     apiKey?: string;
   };
+  /**
+   * Si aparece como socio en la web de uTracker.
+   *
+   * Arranca apagado a propósito: mostrar el nombre y el logo de un negocio
+   * para promocionar uTracker es usar su marca, y eso necesita su permiso.
+   * Que su tienda sea pública no alcanza: ahí se muestra a sus clientes, no
+   * hace publicidad para nosotros. Lo prende el dueño o el superadmin después
+   * de hablarlo con él.
+   */
+  showcase?: boolean;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -105,6 +115,7 @@ const tenantSchema = new Schema<ITenant>(
       // `select: false` para que no viaje por accidente en consultas generales.
       select: false,
     },
+    showcase: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

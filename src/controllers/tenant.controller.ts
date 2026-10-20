@@ -7,6 +7,7 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { seedDefaultWorkflow } from '../services/workflowDefaults';
 import { deleteByUrl } from '../services/storage';
+import { tenantHasFeature } from '../middleware/plan';
 
 function slugify(name: string): string {
   return name
@@ -73,7 +74,7 @@ export const listMyTenants = asyncHandler(async (req: Request, res: Response) =>
 
 export const updateTenantSettings = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { name, logoUrl, phone, brandColor, schedule, deliveryTypes, deliveryFranjas, paymentMethods, lowStockThreshold } =
+  const { name, logoUrl, phone, brandColor, schedule, deliveryTypes, deliveryFranjas, paymentMethods, lowStockThreshold, showcase } =
     req.body as {
       name?: string;
       logoUrl?: string | null;
@@ -84,10 +85,24 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
       deliveryFranjas?: string[];
       paymentMethods?: { name?: string; details?: string; qrImageUrl?: string }[];
       lowStockThreshold?: number;
+      showcase?: boolean;
     };
 
   const tenant = await Tenant.findById(req.auth.tenantId);
   if (!tenant) throw ApiError.notFound('Tenant not found');
+
+  /**
+   * Con la funcionalidad apagada el negocio puede elegir cuál usa, pero no
+   * combinar varios. Es el límite honesto: bloquear el campo entero lo dejaría
+   * sin poder vender, y dejarlo libre haría que el plan no signifique nada.
+   */
+  if (deliveryTypes !== undefined && deliveryTypes.length > 1) {
+    if (!(await tenantHasFeature(req.auth.tenantId, 'deliveryTypes'))) {
+      throw ApiError.forbidden(
+        'Tu plan permite un solo tipo de entrega en la tienda. Sube de plan para ofrecer recojo y delivery a la vez.',
+      );
+    }
+  }
 
   if (name !== undefined) {
     if (!name.trim()) throw ApiError.badRequest('name cannot be empty');
@@ -126,6 +141,8 @@ export const updateTenantSettings = asyncHandler(async (req: Request, res: Respo
   if (lowStockThreshold !== undefined) {
     tenant.lowStockThreshold = Math.max(0, Math.floor(Number(lowStockThreshold) || 0));
   }
+
+  if (showcase !== undefined) tenant.showcase = Boolean(showcase);
 
   if (paymentMethods !== undefined) {
     // Un método sin nombre no le dice nada al cliente: se descarta.

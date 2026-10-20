@@ -8,6 +8,7 @@ import { uploadImage } from '../services/storage';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { createPublicOrder } from '../services/storeOrder';
+import { tenantHasFeature } from '../middleware/plan';
 
 export const getStoreCatalog = asyncHandler(async (req: Request, res: Response) => {
   // Endpoint publico: solo los campos que el cliente necesita ver.
@@ -17,6 +18,22 @@ export const getStoreCatalog = asyncHandler(async (req: Request, res: Response) 
     )
     .lean();
   if (!tenant) throw ApiError.notFound('Store not found');
+
+  /**
+   * El plan decide si esta tienda existe para el público.
+   *
+   * Es 404 y no 403 a propósito: a un comprador no le importa —ni le sirve
+   * saber— que el negocio no paga la tienda online.
+   */
+  if (!(await tenantHasFeature(String(tenant._id), 'publicStore'))) {
+    throw ApiError.notFound('Store not found');
+  }
+
+  // Sin marca propia, la tienda sale con la identidad neutra de uTracker.
+  if (!(await tenantHasFeature(String(tenant._id), 'branding'))) {
+    tenant.logoUrl = undefined;
+    tenant.brandColor = undefined;
+  }
 
   const products = await Product.find({ tenant: tenant._id, isActive: true })
     .sort({ createdAt: -1 })
@@ -76,7 +93,7 @@ export const uploadStoreProof = asyncHandler(async (req: Request, res: Response)
 /**
  * Checkout público del catálogo.
  *
- * Es el gemelo de confirmCampaignOrder, pero contra el catálogo vivo: acá los
+ * Es el gemelo de confirmCampaignOrder, pero contra el catálogo vivo: aquí los
  * precios y el stock se leen del producto en este instante, no de una foto
  * congelada, porque entre que el cliente cargó la página y confirmó pudieron
  * cambiar.

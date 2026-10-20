@@ -15,6 +15,8 @@ import { Product } from '../models/Product';
 import { StockMovement } from '../models/StockMovement';
 import { WorkflowState } from '../models/WorkflowState';
 import { deleteByUrl } from '../services/storage';
+import { invalidateEntitlements } from '../services/entitlements';
+import { parseFeatureMap } from './plan.controller';
 import { Types } from 'mongoose';
 
 // GET /superadmin/stats
@@ -34,45 +36,6 @@ export const getStats = asyncHandler(async (_req: Request, res: Response) => {
   for (const row of statusCounts) byStatus[row._id] = row.count;
 
   res.json({ totalTenants, totalPlans, ordersThisMonth, subscriptions: byStatus });
-});
-
-// GET /superadmin/plans
-export const listPlans = asyncHandler(async (_req: Request, res: Response) => {
-  const plans = await Plan.find().sort({ price: 1 }).lean();
-  res.json(plans);
-});
-
-// POST /superadmin/plans
-export const createPlan = asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, price, features } = req.body;
-  if (!name || features === undefined) throw ApiError.badRequest('name and features are required');
-
-  const plan = await Plan.create({ name, description, price: price ?? 0, features });
-  res.status(201).json(plan);
-});
-
-// PUT /superadmin/plans/:id
-export const updatePlan = asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, price, features, isActive } = req.body;
-  const plan = await Plan.findByIdAndUpdate(
-    req.params.id,
-    { $set: { name, description, price, features, isActive } },
-    { new: true, runValidators: true }
-  );
-  if (!plan) throw ApiError.notFound('Plan not found');
-  res.json(plan);
-});
-
-// DELETE /superadmin/plans/:id
-export const deletePlan = asyncHandler(async (req: Request, res: Response) => {
-  const inUse = await Subscription.countDocuments({ plan: req.params.id });
-  if (inUse > 0) {
-    // Soft-delete: mark inactive so existing subscriptions still reference it
-    await Plan.findByIdAndUpdate(req.params.id, { isActive: false });
-    return res.json({ message: 'Plan deactivated (in use by subscriptions)' });
-  }
-  await Plan.findByIdAndDelete(req.params.id);
-  res.status(204).send();
 });
 
 // GET /superadmin/tenants
@@ -103,25 +66,44 @@ export const listTenants = asyncHandler(async (_req: Request, res: Response) => 
 
 // PATCH /superadmin/tenants/:id/subscription
 export const assignSubscription = asyncHandler(async (req: Request, res: Response) => {
-  const { planId, status, expiresAt, notes } = req.body;
+  const { planId, status, expiresAt, notes, overrides } = req.body;
   if (!planId) throw ApiError.badRequest('planId is required');
 
   const plan = await Plan.findById(planId);
   if (!plan) throw ApiError.notFound('Plan not found');
 
+  const set: Record<string, unknown> = {
+    plan: new Types.ObjectId(planId),
+    status: status ?? 'active',
+    expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+    assignedBy: req.auth!.userId,
+    notes: notes ?? undefined,
+  };
+
+  /**
+   * Las excepciones se mezclan con las que ya tenía y un `null` quita la clave.
+   * Reemplazar el mapa entero obligaría al formulario a reenviar siempre todo,
+   * y cualquier acuerdo viejo se perdería al tocar uno nuevo.
+   */
+  if (overrides !== undefined) {
+    const current = await Subscription.findOne({ tenant: req.params.id }).select('overrides').lean();
+    const patch = parseFeatureMap(overrides, { allowNull: true });
+    const merged: Record<string, unknown> = { ...(current?.overrides ?? {}) };
+
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete merged[key];
+      else merged[key] = value;
+    }
+    set.overrides = merged;
+  }
+
   const sub = await Subscription.findOneAndUpdate(
     { tenant: req.params.id },
-    {
-      $set: {
-        plan: new Types.ObjectId(planId),
-        status: status ?? 'active',
-        expiresAt: expiresAt ? new Date(expiresAt) : undefined,
-        assignedBy: req.auth!.userId,
-        notes: notes ?? undefined,
-      },
-    },
+    { $set: set },
     { new: true, upsert: true, runValidators: true }
-  ).populate('plan', 'name price features');
+  ).populate('plan', 'name code price features');
+
+  invalidateEntitlements(String(req.params.id));
 
   // Auto-generate bill for the current month when plan has a price
   if (plan.price > 0 && sub) {
@@ -146,12 +128,30 @@ export const assignSubscription = asyncHandler(async (req: Request, res: Respons
   res.json(sub);
 });
 
+// PATCH /superadmin/tenants/:id/showcase
+// Mostrarlo o no como socio en el landing. Se prende después de hablarlo con
+// el negocio: es su marca la que se usa para promocionar uTracker.
+export const setTenantShowcase = asyncHandler(async (req: Request, res: Response) => {
+  const { showcase } = req.body as { showcase?: boolean };
+  if (typeof showcase !== 'boolean') throw ApiError.badRequest('showcase debe ser true o false');
+
+  const tenant = await Tenant.findByIdAndUpdate(
+    req.params.id,
+    { $set: { showcase } },
+    { new: true },
+  ).select('name showcase');
+  if (!tenant) throw ApiError.notFound('Negocio no encontrado');
+
+  res.json({ showcase: tenant.showcase });
+});
+
 // PATCH /superadmin/tenants/:id/toggle
 export const toggleSubscription = asyncHandler(async (req: Request, res: Response) => {
   const sub = await Subscription.findOne({ tenant: req.params.id });
   if (!sub) throw ApiError.notFound('No hay suscripción para este negocio');
   sub.status = sub.status === 'suspended' ? 'active' : 'suspended';
   await sub.save();
+  invalidateEntitlements(String(req.params.id));
   res.json({ status: sub.status });
 });
 

@@ -195,7 +195,7 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     const variant = input.variant ? product.variants.find((v) => v.name === input.variant) : undefined;
 
     if (product.pricingMode === 'quoted' && input.unitPrice === undefined) {
-      throw ApiError.badRequest(`"${product.name}" se cotiza por trabajo: indicá el precio`);
+      throw ApiError.badRequest(`"${product.name}" se cotiza por trabajo: indica el precio`);
     }
 
     return {
@@ -483,7 +483,7 @@ export const registerPayment = asyncHandler(async (req: Request, res: Response) 
 
 /**
  * El negocio confirma que el adelanto que subió el cliente efectivamente llegó.
- * Recién acá cuenta como pagado y puede mover el estado de pago.
+ * Recién aquí cuenta como pagado y puede mover el estado de pago.
  */
 export const validatePayment = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();

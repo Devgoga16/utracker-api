@@ -4,7 +4,7 @@ import { Schema, model, Types } from 'mongoose';
  * Permiso temporal para que un superadmin entre al panel de un negocio.
  *
  * La alternativa —que el superadmin pueda tocar cualquier negocio siempre, por
- * ser superadmin— no deja rastro de quién miró qué. Acá cada acceso es un
+ * ser superadmin— no deja rastro de quién miró qué. Aquí cada acceso es un
  * documento con motivo, duración y autor, y todo lo que se escriba mientras
  * esté vigente queda en los logs marcado como soporte.
  */

@@ -17,6 +17,7 @@ import { User } from '../models/User';
 import { env } from '../config/env';
 import { logEvent } from '../services/systemLog';
 import { sendWhatsappMessage, sessionForTenant } from '../services/whatsapp';
+import { tenantHasFeature } from '../middleware/plan';
 
 /** Los estados que siguen pidiendo atención de soporte. */
 const OPEN_STATUSES: TicketStatus[] = ['open', 'in_progress', 'waiting_customer'];
@@ -52,7 +53,7 @@ async function notifyTenantOfReply(ticket: ITicket, preview: string) {
       '',
       body,
       '',
-      `Seguí la conversación acá: ${url}`,
+      `Sigue la conversación aquí: ${url}`,
     ].join('\n'),
     session,
   );
@@ -81,7 +82,7 @@ export const listMyTickets = asyncHandler(async (req: Request, res: Response) =>
 export const createTicket = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
 
-  const { subject, body, category, priority, context } = req.body as {
+  const { subject, body, category, priority: priority_, context } = req.body as {
     subject?: string;
     body?: string;
     category?: TicketCategory;
@@ -89,11 +90,16 @@ export const createTicket = asyncHandler(async (req: Request, res: Response) => 
     context?: ITicket['context'];
   };
 
-  if (!subject?.trim()) throw ApiError.badRequest('Contanos en una línea de qué se trata');
-  if (!body?.trim()) throw ApiError.badRequest('Describí el problema para poder ayudarte');
+  if (!subject?.trim()) throw ApiError.badRequest('Cuéntanos en una línea de qué se trata');
+  if (!body?.trim()) throw ApiError.badRequest('Describe el problema para poder ayudarte');
 
   const name = await authorName(req.auth.userId);
   const now = new Date();
+
+  // Lo que compra el plan prioritario es justamente no tener que pedirlo.
+  const priority = (await tenantHasFeature(req.auth.tenantId, 'prioritySupport'))
+    ? 'high'
+    : pickEnum(priority_, TICKET_PRIORITIES, 'normal');
 
   const ticket = await Ticket.create({
     tenant: req.auth.tenantId,
@@ -102,7 +108,7 @@ export const createTicket = asyncHandler(async (req: Request, res: Response) => 
     subject: subject.trim().slice(0, 160),
     category: pickEnum(category, TICKET_CATEGORIES, 'question'),
     // La prioridad definitiva la pone soporte: lo que manda el negocio es una señal.
-    priority: pickEnum(priority, TICKET_PRIORITIES, 'normal'),
+    priority,
     status: 'open',
     messages: [
       {
@@ -155,7 +161,7 @@ export const getMyTicket = asyncHandler(async (req: Request, res: Response) => {
 export const replyToMyTicket = asyncHandler(async (req: Request, res: Response) => {
   const ticket = await ownTicket(req);
   const { body } = req.body as { body?: string };
-  if (!body?.trim()) throw ApiError.badRequest('Escribí tu respuesta');
+  if (!body?.trim()) throw ApiError.badRequest('Escribe tu respuesta');
 
   const name = await authorName(req.auth!.userId);
   const now = new Date();
@@ -263,7 +269,7 @@ export const replyAsSupport = asyncHandler(async (req: Request, res: Response) =
     status?: TicketStatus;
     notify?: boolean;
   };
-  if (!body?.trim()) throw ApiError.badRequest('Escribí la respuesta');
+  if (!body?.trim()) throw ApiError.badRequest('Escribe la respuesta');
 
   const name = await authorName(req.auth!.userId);
   const now = new Date();

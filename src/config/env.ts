@@ -32,6 +32,9 @@ export const env = {
   },
   orderLinkTtlHours: Number(process.env.ORDER_LINK_TTL_HOURS ?? 24),
 
+  /** Dias que vive una invitacion al equipo antes de vencer. */
+  invitationTtlDays: Number(process.env.INVITATION_TTL_DAYS ?? 7),
+
   /**
    * Origenes permitidos, separados por coma. El front llama a la API desde
    * otro dominio, asi que sin esto el navegador bloquea todo. Acepta varios
@@ -57,6 +60,20 @@ export const env = {
     maxUploadBytes: Number(process.env.R2_MAX_UPLOAD_BYTES ?? 5 * 1024 * 1024),
   },
 
+  /**
+   * Resend, para los correos transaccionales (hoy: invitaciones al equipo).
+   *
+   * Opcional igual que R2: sin esto la API arranca, solo que la invitacion no
+   * sale por correo y queda el link para copiar.
+   */
+  resend: {
+    apiKey: process.env.RESEND_API_KEY,
+    /** Remitente verificado en Resend, ej. 'uTracker <hola@unify-tc.com>'. */
+    from: process.env.RESEND_FROM?.trim(),
+    /** A donde contesta el que recibe el correo. Opcional. */
+    replyTo: process.env.RESEND_REPLY_TO?.trim(),
+  },
+
   // Opcional igual que R2: sin esto la API arranca, solo no manda WhatsApp.
   whatsapp: {
     /**
@@ -71,6 +88,10 @@ export const env = {
 export function isStorageConfigured(): boolean {
   const { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl } = env.r2;
   return Boolean(accountId && accessKeyId && secretAccessKey && bucket && publicBaseUrl);
+}
+
+export function isEmailConfigured(): boolean {
+  return Boolean(env.resend.apiKey && env.resend.from);
 }
 
 export function isWhatsappConfigured(): boolean {

@@ -83,7 +83,7 @@ export async function uploadImage(
 
   const contentType = sniffImageMime(buffer);
   if (!contentType) {
-    throw ApiError.badRequest('Formato no soportado. Usá JPG, PNG, WebP o AVIF.');
+    throw ApiError.badRequest('Formato no soportado. Usa JPG, PNG, WebP o AVIF.');
   }
 
   // Tenant-scoped and random: keys are never guessable from one another.

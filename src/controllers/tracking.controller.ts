@@ -5,6 +5,7 @@ import { WorkflowState } from '../models/WorkflowState';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { orderCode } from '../utils/orderCode';
+import { tenantHasFeature } from '../middleware/plan';
 
 /**
  * Public order tracking. No auth: the token in the URL is the credential, so the
@@ -18,6 +19,11 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
     .lean();
 
   if (!order) throw ApiError.notFound('No encontramos este pedido');
+
+  // El plan decide si el cliente puede seguir su pedido por link.
+  if (!(await tenantHasFeature(String(order.tenant), 'publicTracking'))) {
+    throw ApiError.notFound('No encontramos este pedido');
+  }
 
   const [tenant, states] = await Promise.all([
     Tenant.findById(order.tenant).lean(),

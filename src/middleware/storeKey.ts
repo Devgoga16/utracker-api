@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { StoreApiKey } from '../models/StoreApiKey';
 import { Tenant, ITenant } from '../models/Tenant';
 import { ApiError } from '../utils/ApiError';
+import { tenantHasFeature } from './plan';
 import { asyncHandler } from '../utils/asyncHandler';
 
 declare global {
@@ -48,6 +49,15 @@ export const requireStoreKey = asyncHandler(
 
     const tenant = await Tenant.findOne({ _id: apiKey.tenant, isActive: true }).lean();
     if (!tenant) throw ApiError.notFound('La tienda no está disponible');
+
+    /**
+     * Se revisa el plan aquí y no sólo al crear la llave: si el negocio baja de
+     * plan, las llaves que ya repartió dejan de servir en el momento, sin que
+     * nadie tenga que acordarse de revocarlas una por una.
+     */
+    if (!(await tenantHasFeature(String(tenant._id), 'storefrontApi'))) {
+      throw ApiError.forbidden('El plan de esta tienda no incluye la API de tienda');
+    }
 
     req.storefront = { tenant: tenant as ITenant, apiKeyId: apiKey._id.toString() };
 

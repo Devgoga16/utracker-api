@@ -76,7 +76,7 @@ export const requireTenant = asyncHandler(async (req, res, next) => {
 
   if (!access.canWrite && req.method !== 'GET') {
     throw ApiError.forbidden(
-      'Tu acceso de soporte es de solo lectura. Pedí uno con permiso de cambios para hacer esto.',
+      'Tu acceso de soporte es de solo lectura. Pide uno con permiso de cambios para hacer esto.',
     );
   }
 

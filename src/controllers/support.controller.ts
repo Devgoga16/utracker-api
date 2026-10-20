@@ -113,7 +113,7 @@ export const getLogByRef = asyncHandler(async (req: Request, res: Response) => {
 /**
  * POST /logs/client
  *
- * El front manda acá lo que se rompió de su lado: un render que explotó, una
+ * El front manda aquí lo que se rompió de su lado: un render que explotó, una
  * promesa sin atrapar. Sin esto los errores del navegador no existen para
  * nadie, porque viven y mueren en la consola del usuario.
  */
@@ -308,7 +308,7 @@ export const grantSupportAccess = asyncHandler(async (req: Request, res: Respons
   };
 
   if (!reason?.trim()) {
-    throw ApiError.badRequest('Escribí el motivo del acceso: queda en la bitácora del negocio');
+    throw ApiError.badRequest('Escribe el motivo del acceso: queda en la bitácora del negocio');
   }
 
   const tenant = await Tenant.findById(req.params.id).select('name').lean();

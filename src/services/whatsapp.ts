@@ -1,4 +1,5 @@
 import { env } from '../config/env';
+import { tenantHasFeature } from '../middleware/plan';
 import { Tenant } from '../models/Tenant';
 
 /** Solo advierte una vez por arranque: si no, ensucia el log en cada pedido. */
@@ -57,6 +58,16 @@ export interface WhatsappSession {
   apiKey: string;
 }
 
+/**
+ * Lo que puede devolver la resolución de sesión.
+ *
+ * `'disabled'` es distinto de `null`: null significa "no tiene sesión propia,
+ * usa la compartida", y 'disabled' significa "su plan no incluye avisos, no
+ * mandes nada". Sin esta distinción, apagar la funcionalidad hacía que cayera
+ * al bot compartido y los mensajes salían igual.
+ */
+export type MaybeSession = WhatsappSession | 'disabled' | null;
+
 /** La sesion propia del negocio, o la compartida, o nada. */
 export function resolveSession(tenant?: {
   whatsapp?: { sendUrl?: string; apiKey?: string } | null;
@@ -78,7 +89,10 @@ export function resolveSession(tenant?: {
  * viaja en las consultas normales justamente para que la apiKey no se escape
  * por una respuesta cualquiera.
  */
-export async function sessionForTenant(tenantId: unknown): Promise<WhatsappSession | null> {
+export async function sessionForTenant(tenantId: unknown): Promise<MaybeSession> {
+  // El plan manda: si no incluye avisos, no se resuelve ninguna sesión.
+  if (!(await tenantHasFeature(String(tenantId), 'whatsappNotifications'))) return 'disabled';
+
   const tenant = await Tenant.findById(tenantId).select('+whatsapp').lean();
   return resolveSession(tenant as { whatsapp?: { sendUrl?: string; apiKey?: string } } | null);
 }
@@ -90,8 +104,12 @@ export async function sessionForTenant(tenantId: unknown): Promise<WhatsappSessi
 export async function sendWhatsappOrThrow(
   to: string,
   message: string,
-  session?: WhatsappSession | null,
+  session?: MaybeSession,
 ): Promise<void> {
+  if (session === 'disabled') {
+    throw new Error('El plan de este negocio no incluye notificaciones por WhatsApp.');
+  }
+
   const target = session ?? resolveSession(null);
   if (!target) {
     throw new Error('No hay una sesión de WhatsApp configurada para este negocio.');
@@ -131,8 +149,11 @@ export async function sendWhatsappOrThrow(
 export async function sendWhatsappMessage(
   to: string,
   message: string,
-  session?: WhatsappSession | null,
+  session?: MaybeSession,
 ): Promise<void> {
+  // Sin fallback al bot compartido: su plan no incluye avisos.
+  if (session === 'disabled') return;
+
   const target = session ?? resolveSession(null);
   if (!target) {
     if (!warnedMissingConfig) {
@@ -171,7 +192,7 @@ export function notifyOwnerNewOrder(opts: {
   items: OrderLine[];
   total: number;
   source?: string; // 'campaña: X', 'link de pedido', etc.
-  session?: WhatsappSession | null;
+  session?: MaybeSession;
 }): void {
   const { ownerPhone, customerName, customerPhone, items, total, source } = opts;
 
@@ -222,7 +243,7 @@ export function notifyCustomerNewOrder(opts: {
   scheduledFor?: { date: string; franja?: string };
   /** 'campaña: Helados' o similar, para ubicar al cliente. */
   source?: string;
-  session?: WhatsappSession | null;
+  session?: MaybeSession;
 }): void {
   const {
     customerPhone,
@@ -273,7 +294,7 @@ export function notifyCustomerNewOrder(opts: {
 
   if (trackingToken) {
     parts.push('');
-    parts.push(`Sigue tu pedido acá:\n${env.frontendUrl}/track/${trackingToken}`);
+    parts.push(`Sigue tu pedido aquí:\n${env.frontendUrl}/track/${trackingToken}`);
   }
 
   void sendWhatsappMessage(customerPhone, parts.join('\n'));
@@ -287,7 +308,7 @@ export function notifyCustomerPaymentValidated(opts: {
   amount: number;
   orderCode: string;
   trackingToken?: string;
-  session?: WhatsappSession | null;
+  session?: MaybeSession;
 }): void {
   const { customerPhone, customerName, businessName, amount, orderCode, trackingToken } = opts;
 
@@ -298,7 +319,7 @@ export function notifyCustomerPaymentValidated(opts: {
     `Pedido *${orderCode}*`,
     '',
     'Ya estamos con tu pedido.',
-    trackingToken ? `\nSíguelo acá:\n${env.frontendUrl}/track/${trackingToken}` : '',
+    trackingToken ? `\nSíguelo aquí:\n${env.frontendUrl}/track/${trackingToken}` : '',
   ].filter(Boolean);
 
   void sendWhatsappMessage(customerPhone, lines.join('\n'));
@@ -318,7 +339,7 @@ export function notifyCustomerPaymentRejected(opts: {
   amount: number;
   orderCode: string;
   trackingToken?: string;
-  session?: WhatsappSession | null;
+  session?: MaybeSession;
 }): void {
   const { customerPhone, customerName, businessName, amount, orderCode, trackingToken } = opts;
 
@@ -343,7 +364,7 @@ export function notifyCustomerStateChange(opts: {
   customerName: string;
   stateName: string;
   trackingToken?: string;
-  session?: WhatsappSession | null;
+  session?: MaybeSession;
 }): void {
   const { customerPhone, customerName, stateName, trackingToken } = opts;
 

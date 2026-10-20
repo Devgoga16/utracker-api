@@ -13,3 +13,4 @@ export * from './Campaign';
 export * from './SystemLog';
 export * from './Ticket';
 export * from './SupportAccess';
+export * from './Invitation';

@@ -6,9 +6,13 @@ import { env, isOriginAllowed } from './config/env';
 import { connectDB } from './config/db';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { router } from './routes';
+import { seedDefaultPlans } from './services/planDefaults';
 
 async function main() {
   await connectDB();
+
+  // Crea los planes que falten. No toca ninguno que ya exista.
+  await seedDefaultPlans();
 
   const app = express();
 

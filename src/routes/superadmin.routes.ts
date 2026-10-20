@@ -3,13 +3,10 @@ import { requireAuth } from '../middleware/auth';
 import { requireSuperAdmin } from '../middleware/plan';
 import {
   getStats,
-  listPlans,
-  createPlan,
-  updatePlan,
-  deletePlan,
   listTenants,
   assignSubscription,
   toggleSubscription,
+  setTenantShowcase,
   deleteTenant,
   setTenantWhatsapp,
   getTenantWhatsapp,
@@ -20,6 +17,12 @@ import {
   updateBill,
 } from '../controllers/billing.controller';
 import { whatsappConfig, whatsappTest } from '../controllers/whatsapp.controller';
+import {
+  createPlan,
+  deletePlan,
+  listPlans,
+  updatePlan,
+} from '../controllers/plan.controller';
 import {
   getLogByRef,
   getTenantDetail,
@@ -53,6 +56,8 @@ superadminRoutes.get('/tenants', listTenants);
 superadminRoutes.get('/tenants/:id/detail', getTenantDetail);
 superadminRoutes.patch('/tenants/:id/subscription', assignSubscription);
 superadminRoutes.patch('/tenants/:id/toggle', toggleSubscription);
+// Aparecer como socio en el landing: solo con el permiso del negocio.
+superadminRoutes.patch('/tenants/:id/showcase', setTenantShowcase);
 // Sesion de WhatsApp del negocio: propia o la compartida de uTracker.
 superadminRoutes.get('/tenants/:id/whatsapp', getTenantWhatsapp);
 superadminRoutes.patch('/tenants/:id/whatsapp', setTenantWhatsapp);
@@ -63,7 +68,7 @@ superadminRoutes.get('/bills', listAllBills);
 superadminRoutes.post('/bills/generate', generateMonthlyBills);
 superadminRoutes.patch('/bills/:id', updateBill);
 
-// El navegador nunca habla con el bot: la API key se queda acá.
+// El navegador nunca habla con el bot: la API key se queda aquí.
 superadminRoutes.get('/whatsapp/config', whatsappConfig);
 superadminRoutes.post('/whatsapp/test', whatsappTest);
 

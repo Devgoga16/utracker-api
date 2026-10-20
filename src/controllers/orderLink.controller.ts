@@ -37,7 +37,7 @@ export const createOrderLink = asyncHandler(async (req: Request, res: Response) 
   const quoted = found.find((p) => p.pricingMode === 'quoted');
   if (quoted) {
     throw ApiError.badRequest(
-      `"${quoted.name}" se cotiza por trabajo, así que no se puede enviar por link. Cargá el pedido vos con el precio acordado.`
+      `"${quoted.name}" se cotiza por trabajo, así que no se puede enviar por link. Carga tú el pedido con el precio acordado.`
     );
   }
 

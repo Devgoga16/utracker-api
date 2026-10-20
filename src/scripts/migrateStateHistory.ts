@@ -66,7 +66,7 @@ async function main() {
   console.log(`Pedidos afectados    : ${ordersTouched}`);
 
   if (!apply) {
-    console.log('\nDry run. Volvé a correr con --apply para escribir los cambios.');
+    console.log('\nDry run. Vuelve a correr con --apply para escribir los cambios.');
   } else {
     console.log('\nListo.');
   }
