@@ -154,6 +154,10 @@ export async function sendWhatsappMessage(
   // Sin fallback al bot compartido: su plan no incluye avisos.
   if (session === 'disabled') return;
 
+  // Sin un número de verdad no hay a quién escribir: el cliente de mostrador
+  // del punto de venta no deja teléfono.
+  if (!normalizePhone(to)) return;
+
   const target = session ?? resolveSession(null);
   if (!target) {
     if (!warnedMissingConfig) {
@@ -297,7 +301,7 @@ export function notifyCustomerNewOrder(opts: {
     parts.push(`Sigue tu pedido aquí:\n${env.frontendUrl}/track/${trackingToken}`);
   }
 
-  void sendWhatsappMessage(customerPhone, parts.join('\n'));
+  void sendWhatsappMessage(customerPhone, parts.join('\n'), opts.session);
 }
 
 /** Le confirma al cliente que su pago fue revisado y aceptado. */
@@ -322,7 +326,7 @@ export function notifyCustomerPaymentValidated(opts: {
     trackingToken ? `\nSíguelo aquí:\n${env.frontendUrl}/track/${trackingToken}` : '',
   ].filter(Boolean);
 
-  void sendWhatsappMessage(customerPhone, lines.join('\n'));
+  void sendWhatsappMessage(customerPhone, lines.join('\n'), opts.session);
 }
 
 /**
@@ -355,7 +359,7 @@ export function notifyCustomerPaymentRejected(opts: {
       : 'Escríbenos para regularizarlo.',
   ].filter(Boolean);
 
-  void sendWhatsappMessage(customerPhone, lines.join('\n'));
+  void sendWhatsappMessage(customerPhone, lines.join('\n'), opts.session);
 }
 
 /** Avisa al cliente que su pedido cambió de estado. */
@@ -376,5 +380,5 @@ export function notifyCustomerStateChange(opts: {
     .filter(Boolean)
     .join('\n');
 
-  void sendWhatsappMessage(customerPhone, lines);
+  void sendWhatsappMessage(customerPhone, lines, opts.session);
 }

@@ -2,7 +2,11 @@ import { randomBytes } from 'crypto';
 import { Schema, model, Types } from 'mongoose';
 
 export type OrderType = 'pickup' | 'delivery_third_party' | 'delivery_own';
-export type OrderCreatedVia = 'manual' | 'order_link' | 'store';
+export type OrderCreatedVia = 'manual' | 'order_link' | 'store' | 'pos';
+
+/** Cómo se cobró. Hasta el punto de venta no se guardaba: solo cuánto. */
+export type PaymentMethodKind = 'cash' | 'yape' | 'plin' | 'card' | 'transfer' | 'other';
+export const PAYMENT_METHOD_KINDS: PaymentMethodKind[] = ['cash', 'yape', 'plin', 'card', 'transfer', 'other'];
 export type Franja = 'morning' | 'afternoon' | 'evening';
 
 export interface IScheduledFor {
@@ -45,6 +49,9 @@ export interface IDeliveryInfo {
  * what this order actually went through. `state` is kept only for linkage.
  */
 export interface IPaymentEntry {
+  /** Los pagos anteriores a este cambio no lo traían: se les asigna al abrir el pedido. */
+  _id?: Types.ObjectId;
+  /** Se deduce del monto: «adelanto» si deja saldo, «saldo» si completa el total. */
   kind: 'advance' | 'balance';
   amount: number;
   proofImageUrl?: string;
@@ -61,6 +68,12 @@ export interface IPaymentEntry {
   validatedAt?: Date;
   registeredAt: Date;
   registeredBy?: Types.ObjectId;
+  /** Opcional: los pagos de antes del punto de venta no lo tienen. */
+  method?: PaymentMethodKind;
+  /** Con cuánto pagó en efectivo. El vuelto es esto menos `amount`. */
+  received?: number;
+  /** La caja en la que entró el dinero, si había una abierta. */
+  cashSession?: Types.ObjectId;
 }
 
 export interface IStateHistoryEntry {
@@ -71,6 +84,25 @@ export interface IStateHistoryEntry {
   stateIcon?: string;
   changedAt: Date;
   changedBy?: Types.ObjectId;
+  /** Por qué: el motivo de una cancelación, una devolución. */
+  note?: string;
+}
+
+/**
+ * Dinero que se le devolvió al cliente.
+ *
+ * Va aparte de los pagos y no como un pago negativo: así lo cobrado y lo
+ * devuelto se leen por separado en el pedido, en finanzas y en la caja.
+ */
+export interface IRefund {
+  _id?: Types.ObjectId;
+  amount: number;
+  method?: PaymentMethodKind;
+  note?: string;
+  at: Date;
+  by?: Types.ObjectId;
+  /** La caja de la que salió, si había una abierta. */
+  cashSession?: Types.ObjectId;
 }
 
 export interface IOrder {
@@ -87,6 +119,7 @@ export interface IOrder {
   paymentState: Types.ObjectId;
   stateHistory: IStateHistoryEntry[];
   payments: IPaymentEntry[];
+  refunds: IRefund[];
   createdVia: OrderCreatedVia;
   orderLink?: Types.ObjectId;
   campaign?: Types.ObjectId;
@@ -101,6 +134,11 @@ export interface IOrder {
    */
   paymentRejectedAt?: Date;
   fulfillmentLink?: string;
+  /** La caja en la que se hizo, si es una venta de mostrador. Queda aunque se anule. */
+  cashSession?: Types.ObjectId;
+  /** Venta de mostrador anulada: cuándo y quién. El dinero se devolvió. */
+  voidedAt?: Date;
+  voidedBy?: Types.ObjectId;
   scheduledFor?: IScheduledFor;
   notes?: string;
   createdBy?: Types.ObjectId;
@@ -154,8 +192,12 @@ const paymentEntrySchema = new Schema<IPaymentEntry>(
     validatedAt: { type: Date },
     registeredAt: { type: Date, default: Date.now },
     registeredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    method: { type: String, enum: PAYMENT_METHOD_KINDS },
+    received: { type: Number, min: 0 },
+    cashSession: { type: Schema.Types.ObjectId, ref: 'CashSession' },
   },
-  { _id: false }
+  // Con _id: un pedido puede tener varios pagos y hay que poder señalar uno.
+  { _id: true }
 );
 
 const stateHistorySchema = new Schema<IStateHistoryEntry>(
@@ -167,9 +209,19 @@ const stateHistorySchema = new Schema<IStateHistoryEntry>(
     stateIcon: { type: String },
     changedAt: { type: Date, default: Date.now },
     changedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    note: { type: String, trim: true },
   },
   { _id: false }
 );
+
+const refundSchema = new Schema<IRefund>({
+  amount: { type: Number, required: true, min: 0 },
+  method: { type: String, enum: PAYMENT_METHOD_KINDS },
+  note: { type: String, trim: true },
+  at: { type: Date, default: Date.now },
+  by: { type: Schema.Types.ObjectId, ref: 'User' },
+  cashSession: { type: Schema.Types.ObjectId, ref: 'CashSession' },
+});
 
 const orderSchema = new Schema<IOrder>(
   {
@@ -184,12 +236,16 @@ const orderSchema = new Schema<IOrder>(
     paymentState: { type: Schema.Types.ObjectId, ref: 'WorkflowState', required: true },
     stateHistory: { type: [stateHistorySchema], default: [] },
     payments: { type: [paymentEntrySchema], default: [] },
-    createdVia: { type: String, enum: ['manual', 'order_link', 'store'], default: 'manual' },
+    refunds: { type: [refundSchema], default: [] },
+    createdVia: { type: String, enum: ['manual', 'order_link', 'store', 'pos'], default: 'manual' },
     orderLink: { type: Schema.Types.ObjectId, ref: 'OrderLink' },
     campaign: { type: Schema.Types.ObjectId, ref: 'Campaign' },
     stockReleased: { type: Boolean, default: false },
     paymentRejectedAt: { type: Date },
     fulfillmentLink: { type: String },
+    cashSession: { type: Schema.Types.ObjectId, ref: 'CashSession' },
+    voidedAt: { type: Date },
+    voidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     scheduledFor: {
       type: new Schema<IScheduledFor>(
         {
@@ -209,5 +265,9 @@ orderSchema.index({ tenant: 1, createdAt: -1 });
 orderSchema.index({ tenant: 1, fulfillmentState: 1 });
 // El calendario consulta por rango de fecha programada.
 orderSchema.index({ tenant: 1, 'scheduledFor.date': 1 });
+// El cuadre de una caja suma los pagos que entraron en ella.
+orderSchema.index({ 'payments.cashSession': 1 }, { sparse: true });
+orderSchema.index({ cashSession: 1, createdAt: -1 }, { sparse: true });
+orderSchema.index({ 'refunds.cashSession': 1 }, { sparse: true });
 
 export const Order = model<IOrder>('Order', orderSchema);

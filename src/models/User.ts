@@ -9,6 +9,18 @@ export interface IUser {
   phone?: string;
   isActive: boolean;
   isSuperAdmin: boolean;
+  /**
+   * La contraseña actual la puso el superadmin: al entrar con ella, el usuario
+   * tiene que elegir una propia antes de hacer cualquier otra cosa.
+   */
+  mustChangePassword: boolean;
+  /**
+   * Sube cada vez que cambia la contraseña. Va dentro del refresh token: uno
+   * emitido antes del cambio deja de servir, así un reseteo cierra las
+   * sesiones que estaban abiertas.
+   */
+  tokenVersion: number;
+  passwordChangedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidate: string): Promise<boolean>;
@@ -22,6 +34,9 @@ const userSchema = new Schema<IUser>(
     phone: { type: String },
     isActive: { type: Boolean, default: true },
     isSuperAdmin: { type: Boolean, default: false },
+    mustChangePassword: { type: Boolean, default: false },
+    tokenVersion: { type: Number, default: 0 },
+    passwordChangedAt: { type: Date },
   },
   { timestamps: true }
 );

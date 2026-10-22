@@ -85,7 +85,9 @@ const COUNTERS: Record<LimitKey, (tenantId: string) => Promise<number>> = {
   maxOrdersPerMonth: (tenant) => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    return Order.countDocuments({ tenant, createdAt: { $gte: start } });
+    // Las ventas de mostrador no cuentan: el límite es de pedidos, y una
+    // bodega que vende cien cosas al día lo agotaría en una mañana.
+    return Order.countDocuments({ tenant, createdAt: { $gte: start }, createdVia: { $ne: 'pos' } });
   },
   maxCatalogItems: (tenant) => Product.countDocuments({ tenant, isActive: true }),
   maxWorkflowStates: (tenant) => WorkflowState.countDocuments({ tenant }),

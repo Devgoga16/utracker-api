@@ -51,7 +51,11 @@ export const getFinanceSummary = asyncHandler(async (req: Request, res: Response
     dateBasis,
   } = req.query as Record<string, string | undefined>;
 
-  const match: Record<string, unknown> = { tenant: tenantId };
+  /*
+   * Una venta de mostrador anulada no existió: se devolvió el dinero y el
+   * producto. Si contara, el total vendido subiría y aparecería como deuda.
+   */
+  const match: Record<string, unknown> = { tenant: tenantId, voidedAt: { $exists: false } };
 
   Object.assign(match, dateMatch(dateBasis, from, to));
 
@@ -60,40 +64,66 @@ export const getFinanceSummary = asyncHandler(async (req: Request, res: Response
   if (type) match.type = type;
   if (productId) match['items.product'] = new Types.ObjectId(productId);
 
+  /*
+   * Por pedido: si está cancelado y cuánto dinero se quedó de verdad
+   * (pagos confirmados menos devoluciones).
+   *
+   * Un cancelado no cuenta como vendido ni como deuda: antes sumaba al
+   * facturado y aparecía como pendiente de cobro para siempre. Lo que se
+   * cobró de él y no se devolvió sí cuenta como cobrado, porque está en caja.
+   */
   const [summary] = await Order.aggregate([
     { $match: match },
+    {
+      $lookup: {
+        from: 'workflowstates',
+        localField: 'fulfillmentState',
+        foreignField: '_id',
+        as: 'fs',
+      },
+    },
+    {
+      $addFields: {
+        cancelled: { $eq: [{ $first: '$fs.isCancellation' }, true] },
+        kept: {
+          $subtract: [
+            {
+              $sum: {
+                $map: {
+                  input: {
+                    $filter: {
+                      input: { $ifNull: ['$payments', []] },
+                      cond: { $ne: ['$$this.validated', false] },
+                    },
+                  },
+                  in: '$$this.amount',
+                },
+              },
+            },
+            { $sum: { $map: { input: { $ifNull: ['$refunds', []] }, in: '$$this.amount' } } },
+          ],
+        },
+      },
+    },
     {
       $facet: {
         totals: [
           {
             $group: {
               _id: null,
-              totalRevenue: { $sum: '$totalAmount' },
-              /**
-               * Solo pagos confirmados. Un comprobante que el cliente subio y
-               * nadie reviso no es dinero en caja: contarlo inflaria los
-               * ingresos con plata que podria no haber llegado.
-               */
-              totalCollected: {
+              totalRevenue: { $sum: { $cond: ['$cancelled', 0, '$totalAmount'] } },
+              totalCollected: { $sum: '$kept' },
+              totalPending: {
                 $sum: {
-                  $sum: {
-                    $map: {
-                      input: {
-                        $filter: {
-                          input: { $ifNull: ['$payments', []] },
-                          cond: { $ne: ['$$this.validated', false] },
-                        },
-                      },
-                      in: '$$this.amount',
-                    },
-                  },
+                  $cond: ['$cancelled', 0, { $max: [0, { $subtract: ['$totalAmount', '$kept'] }] }],
                 },
               },
-              orderCount: { $sum: 1 },
+              orderCount: { $sum: { $cond: ['$cancelled', 0, 1] } },
             },
           },
         ],
         topProducts: [
+          { $match: { cancelled: false } },
           { $unwind: '$items' },
           { $match: { 'items.product': { $exists: true, $ne: null } } },
           {
@@ -106,28 +136,20 @@ export const getFinanceSummary = asyncHandler(async (req: Request, res: Response
           },
           { $sort: { revenue: -1 } },
           { $limit: 5 },
-          {
-            $project: {
-              _id: 0,
-              productId: '$_id',
-              name: 1,
-              revenue: 1,
-              quantity: 1,
-            },
-          },
+          { $project: { _id: 0, productId: '$_id', name: 1, revenue: 1, quantity: 1 } },
         ],
       },
     },
   ]);
 
-  const t = summary?.totals?.[0] ?? { totalRevenue: 0, totalCollected: 0, orderCount: 0 };
+  const t = summary?.totals?.[0] ?? { totalRevenue: 0, totalCollected: 0, totalPending: 0, orderCount: 0 };
   const totalRevenue: number = t.totalRevenue ?? 0;
   const totalCollected: number = t.totalCollected ?? 0;
 
   res.json({
     totalRevenue,
     totalCollected,
-    totalPending: totalRevenue - totalCollected,
+    totalPending: t.totalPending ?? 0,
     orderCount: t.orderCount ?? 0,
     avgOrderValue: t.orderCount > 0 ? totalRevenue / t.orderCount : 0,
     topProducts: summary?.topProducts ?? [],
@@ -149,7 +171,11 @@ export const getFinanceOrders = asyncHandler(async (req: Request, res: Response)
     dateBasis,
   } = req.query as Record<string, string | undefined>;
 
-  const match: Record<string, unknown> = { tenant: tenantId };
+  /*
+   * Una venta de mostrador anulada no existió: se devolvió el dinero y el
+   * producto. Si contara, el total vendido subiría y aparecería como deuda.
+   */
+  const match: Record<string, unknown> = { tenant: tenantId, voidedAt: { $exists: false } };
 
   Object.assign(match, dateMatch(dateBasis, from, to));
 

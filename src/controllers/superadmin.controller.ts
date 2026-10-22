@@ -13,6 +13,7 @@ import { Customer } from '../models/Customer';
 import { OrderLink } from '../models/OrderLink';
 import { Product } from '../models/Product';
 import { StockMovement } from '../models/StockMovement';
+import { CashSession } from '../models/CashSession';
 import { WorkflowState } from '../models/WorkflowState';
 import { deleteByUrl } from '../services/storage';
 import { invalidateEntitlements } from '../services/entitlements';
@@ -208,6 +209,7 @@ export const deleteTenant = asyncHandler(async (req: Request, res: Response) => 
     campaigns,
     orderLinks,
     stockMovements,
+    cashSessions,
     categories,
     workflowStates,
     bills,
@@ -220,6 +222,7 @@ export const deleteTenant = asyncHandler(async (req: Request, res: Response) => 
     Campaign.deleteMany(filter),
     OrderLink.deleteMany(filter),
     StockMovement.deleteMany(filter),
+    CashSession.deleteMany(filter),
     Category.deleteMany(filter),
     WorkflowState.deleteMany(filter),
     Bill.deleteMany(filter),
@@ -245,6 +248,7 @@ export const deleteTenant = asyncHandler(async (req: Request, res: Response) => 
       campaigns: campaigns.deletedCount,
       orderLinks: orderLinks.deletedCount,
       stockMovements: stockMovements.deletedCount,
+      cashSessions: cashSessions.deletedCount,
       categories: categories.deletedCount,
       workflowStates: workflowStates.deletedCount,
       bills: bills.deletedCount,

@@ -78,7 +78,7 @@ export const FEATURES = {
   maxOrdersPerMonth: {
     kind: 'limit',
     label: 'Pedidos por mes',
-    hint: 'Se cuentan los creados en el mes en curso, por cualquier vía.',
+    hint: 'Se cuentan los creados en el mes en curso, por cualquier vía. Las ventas del punto de venta no cuentan.',
     group: 'limits',
     enforcement: 'api',
   },
@@ -145,6 +145,13 @@ export const FEATURES = {
     kind: 'flag',
     label: 'Intentos de entrega',
     hint: 'Registrar que no había nadie y reprogramar.',
+    group: 'operation',
+    enforcement: 'api',
+  },
+  pos: {
+    kind: 'flag',
+    label: 'Punto de venta',
+    hint: 'Venta rápida en mostrador, con caja, vuelto y ticket. No emite comprobantes electrónicos.',
     group: 'operation',
     enforcement: 'api',
   },

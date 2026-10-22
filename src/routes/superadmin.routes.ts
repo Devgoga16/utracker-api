@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireSuperAdmin } from '../middleware/plan';
+import { changeUserEmail, listUsers, resetUserPassword } from '../controllers/superadminUsers.controller';
 import {
   getStats,
   listTenants,
@@ -43,6 +44,11 @@ import {
 export const superadminRoutes = Router();
 
 superadminRoutes.use(requireAuth, requireSuperAdmin);
+
+// Cuentas de personas: buscar, corregir el correo, contraseña temporal.
+superadminRoutes.get('/users', listUsers);
+superadminRoutes.patch('/users/:id/email', changeUserEmail);
+superadminRoutes.post('/users/:id/reset-password', resetUserPassword);
 
 superadminRoutes.get('/stats', getStats);
 

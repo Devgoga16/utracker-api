@@ -14,6 +14,7 @@ import {
   notifyCustomerNewOrder,
   sessionForTenant,
 } from '../services/whatsapp';
+import { syncOrderStock } from '../services/orderStock';
 
 function generateToken(): string {
   return crypto.randomBytes(8).toString('hex');
@@ -315,6 +316,9 @@ export const confirmCampaignOrder = asyncHandler(async (req: Request, res: Respo
     createdVia: 'order_link',
     notes: `Pedido de campaña: ${campaign.name}`,
   });
+
+  // Por si el estado inicial es el que descuenta stock.
+  await syncOrderStock(order, String(order.tenant));
 
   const populated = await Order.findById((order as any)._id).populate('customer');
 

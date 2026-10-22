@@ -54,7 +54,8 @@ const workflowStateSchema = new Schema<IWorkflowState>(
     allowedRoles: {
       type: [String],
       enum: ['owner', 'admin', 'staff', 'driver'],
-      default: ['owner', 'admin'],
+      // El personal es quien atiende: sin él, alguien recién invitado no podía mover nada.
+      default: ['owner', 'admin', 'staff'],
     },
   },
   { timestamps: true }

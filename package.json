@@ -11,7 +11,8 @@
     "migrate:history": "tsx src/scripts/migrateStateHistory.ts",
     "migrate:tracking": "tsx src/scripts/migrateTrackingTokens.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "migrate:plans": "tsx src/scripts/migratePlans.ts"
+    "migrate:plans": "tsx src/scripts/migratePlans.ts",
+    "migrate:staff-roles": "tsx src/scripts/migrateStaffRoles.ts"
   },
   "keywords": [],
   "author": "",

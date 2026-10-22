@@ -8,6 +8,7 @@ import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { buildHistoryEntry } from './stateHistory';
 import { notifyOwnerNewOrder, notifyCustomerNewOrder, sessionForTenant } from './whatsapp';
+import { syncOrderStock } from './orderStock';
 
 export interface StoreOrderItemInput {
   productId: string;
@@ -216,6 +217,9 @@ export async function createPublicOrder(
     createdVia: 'store',
     notes: notes?.trim() || undefined,
   });
+
+  // Por si el estado inicial es el que descuenta stock.
+  await syncOrderStock(order, String(order.tenant));
 
   const created = order as unknown as { _id: Types.ObjectId; trackingToken: string };
 

@@ -8,10 +8,10 @@ import { Invitation, newInvitationToken } from '../models/Invitation';
 import { Membership, MembershipRole } from '../models/Membership';
 import { Tenant } from '../models/Tenant';
 import { User } from '../models/User';
-import { signAccessToken, signRefreshToken } from '../utils/jwt';
+import { sessionFor } from './auth.controller';
 import { invitationEmail, sendEmail } from '../services/email';
 import { getEntitlements, limitOf } from '../services/entitlements';
-import { sendWhatsappMessage, sessionForTenant } from '../services/whatsapp';
+import { isSharedBotConfigured, sendWhatsappMessage } from '../services/whatsapp';
 import { logEvent } from '../services/systemLog';
 
 const ROLES: MembershipRole[] = ['owner', 'admin', 'staff', 'driver'];
@@ -242,8 +242,12 @@ export const inviteMember = asyncHandler(async (req: Request, res: Response) => 
   // Si dejó teléfono, además por WhatsApp: es por donde la gente mira.
   let whatsappSent = false;
   if (invitation.phone) {
-    const session = await sessionForTenant(tenantId);
-    whatsappSent = session !== 'disabled';
+    /*
+     * Sale por el número de uTracker, no por el del negocio: es un mensaje
+     * del sistema, y si el plan no incluye avisos la invitación igual tiene
+     * que llegar.
+     */
+    whatsappSent = isSharedBotConfigured();
     void sendWhatsappMessage(
       invitation.phone,
       [
@@ -253,7 +257,6 @@ export const inviteMember = asyncHandler(async (req: Request, res: Response) => 
         '',
         `Acepta aquí: ${url}`,
       ].join('\n'),
-      session,
     );
   }
 
@@ -490,10 +493,9 @@ export const acceptInvitation = asyncHandler(async (req: Request, res: Response)
     user: String(user._id),
   });
 
+  // La misma sesión que el ingreso normal: con la versión de su contraseña.
   res.json({
-    user: { id: user._id, name: user.name, email: user.email, isSuperAdmin: user.isSuperAdmin },
-    accessToken: signAccessToken(user._id.toString()),
-    refreshToken: signRefreshToken(user._id.toString()),
+    ...sessionFor(user),
     tenant: tenant ? { ...tenant, role: invitation.role } : null,
   });
 });

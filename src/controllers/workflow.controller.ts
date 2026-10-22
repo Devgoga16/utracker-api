@@ -1,9 +1,31 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import { WorkflowState, WorkflowKind } from '../models/WorkflowState';
 import { Order } from '../models/Order';
 import { MembershipRole } from '../models/Membership';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+
+/**
+ * Quién puede mover un pedido a un estado nuevo, si no se dice. El personal
+ * entra porque es quien atiende: antes nacían solo para dueño y administrador
+ * y alguien recién invitado no podía mover nada.
+ */
+const DEFAULT_ROLES: MembershipRole[] = ['owner', 'admin', 'staff'];
+
+/**
+ * El stock se descuenta desde un solo estado. Marcar uno desmarca los demás:
+ * con dos marcados no queda claro cuándo sale, y antes se descontaba dos veces.
+ */
+async function keepSingleDeductionPoint(tenantId: string, keep: Types.ObjectId) {
+  await WorkflowState.updateMany(
+    { tenant: tenantId, kind: 'fulfillment', deductsStock: true, _id: { $ne: keep } },
+    { $set: { deductsStock: false } },
+  );
+}
+
+const PAYMENT_STATES_LOCKED =
+  'Los estados de pago los asigna el sistema según lo cobrado. Puedes cambiarles el nombre, el color y el ícono.';
 
 function parseKind(value: unknown): WorkflowKind {
   if (value !== 'fulfillment' && value !== 'payment') {
@@ -29,6 +51,8 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
 
   const kind = parseKind(rawKind);
   if (!name?.trim()) throw ApiError.badRequest('El nombre es obligatorio');
+  // El estado de pago sale de los montos: uno nuevo nunca se asignaría a nadie.
+  if (kind === 'payment') throw ApiError.badRequest(PAYMENT_STATES_LOCKED);
 
   const last = await WorkflowState.findOne({ tenant: tenantId, kind }).sort({ position: -1 });
 
@@ -46,8 +70,9 @@ export const createState = asyncHandler(async (req: Request, res: Response) => {
     deductsStock: kind === 'fulfillment' ? (deductsStock ?? false) : false,
     // Solo tiene sentido en fulfillment: el pago no depende de como se entrega.
     appliesTo: (kind === 'fulfillment' ? (appliesTo ?? []) : []) as never,
-    allowedRoles: allowedRoles?.length ? allowedRoles : ['owner', 'admin'],
+    allowedRoles: allowedRoles?.length ? allowedRoles : DEFAULT_ROLES,
   });
+  if (state.deductsStock) await keepSingleDeductionPoint(tenantId, state._id);
 
   res.status(201).json({ state });
 });
@@ -79,6 +104,17 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   }
   if (color !== undefined) state.color = color;
   if (icon !== undefined) state.icon = icon;
+
+  /*
+   * En un estado de pago solo se cambia cómo se ve. Sus marcas (inicial,
+   * final) son las que el sistema usa para elegirlo según lo cobrado:
+   * moverlas haría que «Pagado» se asigne a un pedido que no pagó nada.
+   */
+  if (state.kind === 'payment') {
+    await state.save();
+    res.json({ state });
+    return;
+  }
   if (notifyCustomer !== undefined) state.notifyCustomer = notifyCustomer;
   if (vibrant !== undefined) state.vibrant = vibrant;
   if (requiresLink !== undefined) state.requiresLink = requiresLink;
@@ -114,6 +150,7 @@ export const updateState = asyncHandler(async (req: Request, res: Response) => {
   }
 
   await state.save();
+  if (state.deductsStock) await keepSingleDeductionPoint(tenantId, state._id);
   res.json({ state });
 });
 
@@ -123,6 +160,8 @@ export const deleteState = asyncHandler(async (req: Request, res: Response) => {
 
   const state = await WorkflowState.findOne({ _id: req.params.id, tenant: tenantId });
   if (!state) throw ApiError.notFound('Estado no encontrado');
+
+  if (state.kind === 'payment') throw ApiError.conflict(PAYMENT_STATES_LOCKED);
 
   if (state.isCancellation) {
     throw ApiError.conflict('El estado de cancelación no se puede eliminar');
@@ -157,6 +196,7 @@ export const reorderStates = asyncHandler(async (req: Request, res: Response) =>
 
   const { kind: rawKind, orderedIds } = req.body as { kind: unknown; orderedIds?: string[] };
   const kind = parseKind(rawKind);
+  if (kind === 'payment') throw ApiError.badRequest(PAYMENT_STATES_LOCKED);
   if (!Array.isArray(orderedIds) || !orderedIds.length) {
     throw ApiError.badRequest('orderedIds es obligatorio');
   }

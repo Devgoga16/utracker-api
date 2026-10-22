@@ -69,7 +69,7 @@ export async function checkLowStock(
       'Conviene reponer antes de que te lo pidan.',
     ];
 
-    await sendWhatsappMessage(tenant.phone, lines.join('\n'));
+    await sendWhatsappMessage(tenant.phone, lines.join('\n'), await sessionForTenant(tenantId));
   } catch (err) {
     console.error('[stock] No se pudo avisar del stock bajo:', err);
   }

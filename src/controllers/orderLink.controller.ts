@@ -15,6 +15,7 @@ import {
   notifyCustomerNewOrder,
   sessionForTenant,
 } from '../services/whatsapp';
+import { syncOrderStock } from '../services/orderStock';
 
 interface OrderLinkItemInput {
   productId: string;
@@ -153,6 +154,9 @@ export const confirmPublicOrderLink = asyncHandler(async (req: Request, res: Res
     orderLink: link._id,
     scheduledFor,
   });
+
+  // Por si el estado inicial es el que descuenta stock.
+  await syncOrderStock(order, String(order.tenant));
 
   link.status = 'used';
   link.resultingOrder = order._id;

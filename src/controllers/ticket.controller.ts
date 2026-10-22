@@ -16,7 +16,7 @@ import { Tenant } from '../models/Tenant';
 import { User } from '../models/User';
 import { env } from '../config/env';
 import { logEvent } from '../services/systemLog';
-import { sendWhatsappMessage, sessionForTenant } from '../services/whatsapp';
+import { sendWhatsappMessage } from '../services/whatsapp';
 import { tenantHasFeature } from '../middleware/plan';
 
 /** Los estados que siguen pidiendo atención de soporte. */
@@ -40,7 +40,8 @@ async function notifyTenantOfReply(ticket: ITicket, preview: string) {
   const tenant = await Tenant.findById(ticket.tenant).select('name phone').lean();
   if (!tenant?.phone) return;
 
-  const session = await sessionForTenant(ticket.tenant);
+  // Por el número de uTracker siempre: es soporte el que habla, y el aviso
+  // tiene que llegar aunque el plan del negocio no incluya avisos.
   const url = `${env.frontendUrl}/support/${ticket._id}`;
   const body = preview.length > 220 ? `${preview.slice(0, 220)}…` : preview;
 
@@ -55,7 +56,6 @@ async function notifyTenantOfReply(ticket: ITicket, preview: string) {
       '',
       `Sigue la conversación aquí: ${url}`,
     ].join('\n'),
-    session,
   );
 }
 

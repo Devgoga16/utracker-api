@@ -21,6 +21,7 @@ import { logRoutes, ticketRoutes } from './ticket.routes';
 import { planRoutes } from './plan.routes';
 import { invitationRoutes, teamRoutes } from './team.routes';
 import { showcaseRoutes } from './showcase.routes';
+import { posRoutes } from './pos.routes';
 
 export const router = Router();
 
@@ -36,6 +37,8 @@ router.use('/categories', categoryRoutes);
 router.use('/product-filters', productFilterRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/finance', financeRoutes);
+// Punto de venta: ventas de mostrador y caja.
+router.use('/pos', posRoutes);
 router.use('/superadmin', superadminRoutes);
 // Planes y catalogo de funcionalidades: publicos, los lee la pagina de precios.
 router.use('/plans', planRoutes);

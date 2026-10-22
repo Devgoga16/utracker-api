@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
-import { Order } from '../models/Order';
+import { Order, PAYMENT_METHOD_KINDS, PaymentMethodKind } from '../models/Order';
+import { CashSession } from '../models/CashSession';
 import { Campaign } from '../models/Campaign';
 import { Product } from '../models/Product';
+import { applyFulfillmentState, syncOrderStock } from '../services/orderStock';
 import { Customer } from '../models/Customer';
 import { Tenant } from '../models/Tenant';
 import { WorkflowState } from '../models/WorkflowState';
@@ -10,7 +12,6 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildHistoryEntry } from '../services/stateHistory';
 import { orderCode } from '../utils/orderCode';
-import { checkLowStock } from '../services/stockAlerts';
 import { deleteByUrl } from '../services/storage';
 import {
   notifyCustomerStateChange,
@@ -18,37 +19,18 @@ import {
   notifyCustomerPaymentRejected,
   sessionForTenant,
 } from '../services/whatsapp';
-import { StockMovement } from '../models/StockMovement';
+import {
+  ensurePaymentIds,
+  kindForNewPayment,
+  pendingTotal,
+  refundedTotal,
+  resolvePaymentState,
+  syncPaymentState,
+  validatedTotal,
+} from '../services/payments';
 
-/**
- * Picks the right payment WorkflowState based on how much has been paid.
- * Uses position order so it works with any tenant's custom state names.
- *
- * totalPaid === 0            → initial state
- * 0 < totalPaid < total      → first non-initial, non-final, non-cancellation state ("Parcial")
- * totalPaid >= total         → first non-cancellation final state ("Pagado")
- */
-/**
- * Solo cuenta lo que el negocio ya confirmó que llegó.
- *
- * Un comprobante que subió el cliente no mueve el estado de pago hasta que
- * alguien lo revise: si no, bastaría con subir cualquier captura para que el
- * pedido figure como pagado.
- */
-function validatedTotal(payments: { amount: number; validated?: boolean }[]) {
-  return payments.reduce((s, p) => (p.validated === false ? s : s + p.amount), 0);
-}
-
-async function resolvePaymentState(tenantId: string, totalPaid: number, totalAmount: number) {
-  const states = await WorkflowState.find({ tenant: tenantId, kind: 'payment' }).sort({ position: 1 });
-  if (totalPaid >= totalAmount) {
-    return states.find((s) => s.isFinal && !s.isCancellation) ?? states.find((s) => s.isFinal) ?? null;
-  }
-  if (totalPaid > 0) {
-    return states.find((s) => !s.isInitial && !s.isFinal) ?? states.find((s) => s.isInitial) ?? null;
-  }
-  return states.find((s) => s.isInitial) ?? null;
-}
+// Re-exportado: el punto de venta lo usa desde aquí.
+export { resolvePaymentState };
 
 /** Suma las unidades de cada producto en el pedido. */
 function quantitiesByProduct(order: { items: { product?: Types.ObjectId; quantity: number }[] }) {
@@ -75,41 +57,6 @@ async function releaseCampaignStock(
     if (item) item.sold = Math.max(0, item.sold + sign * qty);
   }
   await campaign.save();
-}
-
-/**
- * Devuelve al inventario lo que este pedido descontó de verdad.
- *
- * Se apoya en StockMovement en vez de en las cantidades del pedido: uno que se
- * cancela antes de pasar por el estado que descuenta nunca descontó nada, y
- * devolverle stock crearía unidades de la nada.
- */
-async function restoreCatalogStock(orderId: Types.ObjectId, tenantId: string, userId?: string) {
-  const movements = await StockMovement.find({ order: orderId, tenant: tenantId }).lean();
-  if (!movements.length) return;
-
-  const net = new Map<string, number>();
-  for (const m of movements) {
-    const key = m.product.toString();
-    net.set(key, (net.get(key) ?? 0) + m.delta);
-  }
-
-  for (const [productId, delta] of net) {
-    if (delta >= 0) continue; // ya está devuelto
-    const giveBack = -delta;
-    await Promise.all([
-      Product.updateOne({ _id: productId, tenant: tenantId }, { $inc: { stock: giveBack } }),
-      StockMovement.create({
-        tenant: tenantId,
-        product: productId,
-        order: orderId,
-        delta: giveBack,
-        reason: 'adjustment',
-        note: 'Devolución automática por pedido cancelado',
-        createdBy: userId ? new Types.ObjectId(userId) : undefined,
-      }),
-    ]);
-  }
 }
 
 interface CreateOrderItemInput {
@@ -141,7 +88,7 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     type: 'pickup' | 'delivery_third_party' | 'delivery_own';
     delivery?: { address?: string; reference?: string; courierName?: string; driver?: string };
     notes?: string;
-    advance?: { amount: number; proofImageUrl?: string };
+    advance?: { amount: number; proofImageUrl?: string; method?: string };
     scheduledFor?: { date: string; franja: 'morning' | 'afternoon' | 'evening' };
   };
 
@@ -216,8 +163,31 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
   ]);
   if (!initialFulfillment || !initialPayment) throw ApiError.badRequest('Tenant workflow is not configured');
 
-  const initialPayments = advance && advance.amount > 0
-    ? [{ kind: 'advance' as const, amount: advance.amount, proofImageUrl: advance.proofImageUrl, registeredAt: new Date(), registeredBy: req.auth.userId ? new Types.ObjectId(req.auth.userId) : undefined }]
+  /*
+   * Lo que el cliente dejó pagado al hacer el pedido. Puede ser todo: alguien
+   * que paga completo por adelantado no tiene por qué registrarlo en dos pasos.
+   */
+  const advanceAmount = Math.round(Number(advance?.amount ?? 0) * 100) / 100;
+  if (advanceAmount > totalAmount + 0.001) {
+    throw ApiError.badRequest('Lo pagado no puede ser mayor al total del pedido');
+  }
+  const advanceMethod = parseMethod(advance?.method);
+  const openSession = advanceAmount > 0 && advanceMethod
+    ? await CashSession.findOne({ tenant: tenantId, status: 'open' }).select('_id').lean()
+    : null;
+
+  const initialPayments = advanceAmount > 0
+    ? [{
+        kind: kindForNewPayment(0, advanceAmount, totalAmount),
+        amount: advanceAmount,
+        proofImageUrl: advance?.proofImageUrl || undefined,
+        validated: true,
+        validatedAt: new Date(),
+        registeredAt: new Date(),
+        registeredBy: req.auth.userId ? new Types.ObjectId(req.auth.userId) : undefined,
+        method: advanceMethod,
+        cashSession: openSession?._id,
+      }]
     : [];
 
   const advanceTotalPaid = initialPayments.reduce((s, p) => s + p.amount, 0);
@@ -251,6 +221,9 @@ export const createOrder = asyncHandler(async (req: Request, res: Response) => {
     createdBy: req.auth.userId,
   });
 
+  // Por si el estado inicial es el que descuenta stock.
+  await syncOrderStock(order, tenantId, req.auth.userId);
+
   res.status(201).json({ order });
 });
 
@@ -258,6 +231,12 @@ export const listOrders = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const filter: Record<string, unknown> = { tenant: req.auth.tenantId };
   if (req.query.campaign) filter.campaign = req.query.campaign as string;
+  /*
+   * Las ventas de mostrador no son pedidos que haya que atender: nacen
+   * entregadas y pagadas. Mezclarlas llenaría la lista de algo que ya terminó;
+   * tienen su propio historial en la caja.
+   */
+  filter.createdVia = req.query.channel === 'pos' ? 'pos' : { $ne: 'pos' };
   const orders = await Order.find(filter)
     .sort({ createdAt: -1 })
     .populate('customer fulfillmentState paymentState');
@@ -316,6 +295,8 @@ export const calendarOrders = asyncHandler(async (req: Request, res: Response) =
 
 export const getOrder = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
+  if (!Types.ObjectId.isValid(String(req.params.id))) throw ApiError.notFound('Order not found');
+  await ensurePaymentIds(String(req.params.id), req.auth.tenantId);
   // stateHistory carries its own frozen display data, so it needs no populate.
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId }).populate(
     'customer fulfillmentState paymentState'
@@ -327,189 +308,243 @@ export const getOrder = asyncHandler(async (req: Request, res: Response) => {
 export const updateOrderState = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
   const { kind, stateId, link } = req.body as { kind: 'fulfillment' | 'payment'; stateId: string; link?: string };
-  if (!kind || !stateId) throw ApiError.badRequest('kind and stateId are required');
+  if (!stateId) throw ApiError.badRequest('stateId is required');
+  // El estado de pago sale de lo cobrado: moverlo a mano lo dejaría mintiendo.
+  if (kind === 'payment') {
+    throw ApiError.badRequest('El estado de pago se actualiza solo al registrar o devolver pagos.');
+  }
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
 
-  const state = await WorkflowState.findOne({ _id: stateId, tenant: req.auth.tenantId, kind });
+  const state = await WorkflowState.findOne({ _id: stateId, tenant: req.auth.tenantId, kind: 'fulfillment' });
   if (!state) throw ApiError.badRequest('Invalid state for this tenant/kind');
 
   if (req.auth.role && !state.allowedRoles.includes(req.auth.role)) {
-    throw ApiError.forbidden('Your role cannot set this state');
+    throw ApiError.forbidden(`Tu rol no puede pasar pedidos a «${state.name}». El dueño lo habilita en Workflow.`);
   }
 
-  if (kind === 'fulfillment') {
-    order.fulfillmentState = state._id;
-    order.fulfillmentLink = link?.trim() || undefined;
-
-    if (state.deductsStock) {
-      const productItems = order.items.filter((i) => i.product);
-      if (productItems.length) {
-        const productIds = productItems.map((i) => i.product!);
-        const tracked = await Product.find({
-          _id: { $in: productIds },
-          tenant: req.auth.tenantId,
-          trackStock: true,
-        }).select('_id');
-        const trackedSet = new Set(tracked.map((p) => p._id.toString()));
-
-        const deducted = productItems.filter((i) => trackedSet.has(i.product!.toString()));
-
-        await Promise.all(
-          deducted
-            .map((i) =>
-              Promise.all([
-                Product.updateOne({ _id: i.product }, { $inc: { stock: -i.quantity } }),
-                StockMovement.create({
-                  tenant: req.auth!.tenantId,
-                  product: i.product,
-                  order: order._id,
-                  delta: -i.quantity,
-                  reason: 'order',
-                  createdBy: req.auth!.userId ? new Types.ObjectId(req.auth!.userId) : undefined,
-                }),
-              ])
-            )
-        );
-        // Después del descuento: avisa solo si alguno cruzó su umbral.
-        void checkLowStock(
-          req.auth.tenantId,
-          deducted.map((i) => ({ productId: i.product!.toString(), soldUnits: i.quantity })),
-        );
-      }
-      // Volvió a descontar: si estaba devuelto, ya no lo está.
-      order.stockReleased = false;
-    }
-
-    /**
-     * Cancelar es "este pedido nunca se concretó": vuelven las unidades de la
-     * campaña y lo que se hubiera descontado del inventario. El flag evita
-     * devolver dos veces si se pasa entre dos estados de cancelación.
-     */
-    if (state.isCancellation && !order.stockReleased) {
-      if (order.campaign) {
-        await releaseCampaignStock(
-          order.campaign,
-          req.auth.tenantId,
-          quantitiesByProduct(order),
-          -1,
-        );
-      }
-      await restoreCatalogStock(order._id, req.auth.tenantId, req.auth.userId);
-      order.stockReleased = true;
-    } else if (!state.isCancellation && order.stockReleased) {
-      // Se revirtió la cancelación: la campaña vuelve a reservar sus unidades.
-      if (order.campaign) {
-        await releaseCampaignStock(
-          order.campaign,
-          req.auth.tenantId,
-          quantitiesByProduct(order),
-          1,
-        );
-      }
-      order.stockReleased = false;
-    }
-  } else {
-    order.paymentState = state._id;
-  }
-
-  order.stateHistory.push(buildHistoryEntry(state, req.auth.userId));
+  await applyFulfillmentState(order, state, req.auth.tenantId, req.auth.userId, { link });
   await order.save();
 
-  // Notificación al cliente (best-effort: no bloquea ni rompe la respuesta).
-  if (state.notifyCustomer) {
-    const [customer, session] = await Promise.all([
-      Customer.findById(order.customer).select('name phone').lean(),
-      sessionForTenant(req.auth.tenantId),
-    ]);
-    if (customer?.phone) {
-      notifyCustomerStateChange({
-        customerPhone: customer.phone,
-        customerName: customer.name,
-        stateName: state.name,
-        trackingToken: order.trackingToken,
-        session,
-      });
-    }
+  await notifyStateChange(order, state, req.auth.tenantId);
+  res.json({ order });
+});
+
+/** Aviso al cliente, si el estado lo pide. Best-effort: no bloquea la respuesta. */
+async function notifyStateChange(
+  order: { customer: Types.ObjectId; trackingToken: string },
+  state: { notifyCustomer: boolean; name: string },
+  tenantId: string,
+) {
+  if (!state.notifyCustomer) return;
+  const [customer, session] = await Promise.all([
+    Customer.findById(order.customer).select('name phone').lean(),
+    sessionForTenant(tenantId),
+  ]);
+  if (customer?.phone) {
+    notifyCustomerStateChange({
+      customerPhone: customer.phone,
+      customerName: customer.name,
+      stateName: state.name,
+      trackingToken: order.trackingToken,
+      session,
+    });
   }
+}
+
+/**
+ * POST /orders/:id/cancel — cancela el pedido, con su motivo en el historial.
+ *
+ * Es la forma de sacar un pedido de circulación: vuelve el stock y la reserva
+ * de la campaña, y el pedido queda a la vista con todo lo que pasó. Eliminar
+ * borra hasta el rastro, por eso queda solo para el dueño y el administrador.
+ *
+ * No exige que el rol esté habilitado en el estado de cancelación: cancelar
+ * es una acción del día a día del personal, no un paso del recorrido.
+ */
+export const cancelOrder = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.auth?.tenantId) throw ApiError.unauthorized();
+  const reason = String(req.body?.reason ?? '').trim();
+
+  const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
+  if (!order) throw ApiError.notFound('Order not found');
+  if (order.createdVia === 'pos') {
+    throw ApiError.conflict('Una venta de mostrador se anula desde la caja.');
+  }
+
+  const states = await WorkflowState.find({ tenant: req.auth.tenantId, kind: 'fulfillment' }).sort({ position: 1 });
+  if (states.find((s) => s._id.equals(order.fulfillmentState))?.isCancellation) {
+    throw ApiError.conflict('Este pedido ya está cancelado.');
+  }
+  const cancelled = states.find((s) => s.isCancellation);
+  if (!cancelled) throw ApiError.badRequest('Tu workflow necesita un estado de cancelación.');
+
+  await applyFulfillmentState(order, cancelled, req.auth.tenantId, req.auth.userId, {
+    note: reason || undefined,
+  });
+  await order.save();
+
+  await notifyStateChange(order, cancelled, req.auth.tenantId);
+  res.json({ order });
+});
+
+/**
+ * POST /orders/:id/refunds — registra dinero devuelto al cliente.
+ *
+ * Normalmente después de cancelar, pero no lo exige: también sirve para
+ * devolver una parte (cobraste de más, faltó un producto).
+ */
+export const refundOrder = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.auth?.tenantId) throw ApiError.unauthorized();
+  const method = parseMethod(req.body?.method);
+  const note = String(req.body?.note ?? '').trim() || undefined;
+  const amount = Math.round(Number(req.body?.amount) * 100) / 100;
+  if (!Number.isFinite(amount) || amount <= 0) throw ApiError.badRequest('El monto debe ser mayor a 0');
+
+  const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
+  if (!order) throw ApiError.notFound('Order not found');
+  if (order.createdVia === 'pos') {
+    throw ApiError.conflict('Una venta de mostrador se anula desde la caja: ahí sale el dinero del cuadre.');
+  }
+
+  const available = Math.round((validatedTotal(order.payments) - refundedTotal(order.refunds)) * 100) / 100;
+  if (amount > available + 0.001) {
+    throw ApiError.badRequest(
+      available <= 0
+        ? 'No hay dinero cobrado para devolver en este pedido.'
+        : `Solo se puede devolver lo cobrado: S/ ${available.toFixed(2)}.`,
+    );
+  }
+
+  // Si sale en efectivo con la caja abierta, sale de esa caja.
+  const openSession = method
+    ? await CashSession.findOne({ tenant: req.auth.tenantId, status: 'open' }).select('_id').lean()
+    : null;
+
+  order.refunds.push({
+    amount,
+    method,
+    note,
+    at: new Date(),
+    by: req.auth.userId ? new Types.ObjectId(req.auth.userId) : undefined,
+    cashSession: openSession?._id,
+  });
+  await syncPaymentState(order, req.auth.tenantId, req.auth.userId);
+  await order.save();
 
   res.json({ order });
 });
 
+/**
+ * Busca un pago por su id. Acepta también 'advance' / 'balance', que es como
+ * se identificaban antes de que un pedido pudiera tener más de un pago de
+ * cada tipo: así un panel viejo abierto en otra pestaña no se rompe.
+ */
+function findPaymentIndex(payments: { _id?: Types.ObjectId; kind: string }[], ref: string) {
+  if (ref === 'advance' || ref === 'balance') return payments.findIndex((p) => p.kind === ref);
+  return payments.findIndex((p) => p._id?.toString() === ref);
+}
+
+function parseMethod(raw: unknown): PaymentMethodKind | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (!PAYMENT_METHOD_KINDS.includes(raw as PaymentMethodKind)) {
+    throw ApiError.badRequest('Medio de pago no válido');
+  }
+  return raw as PaymentMethodKind;
+}
+
+/**
+ * POST /orders/:id/payments — registra un pago.
+ *
+ * Un pedido puede tener los pagos que haga falta: antes había exactamente un
+ * «adelanto» y un «saldo», y quien pagaba en tres partes no tenía cómo
+ * registrarse. Si es adelanto o saldo se deduce del monto, no se pregunta.
+ */
 export const registerPayment = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { kind, amount, proofImageUrl, note } = req.body as {
-    kind: 'advance' | 'balance';
+  const { amount: rawAmount, proofImageUrl, note } = req.body as {
     amount: number;
     proofImageUrl?: string;
     note?: string;
   };
-
-  if (!kind || !['advance', 'balance'].includes(kind)) throw ApiError.badRequest('kind must be advance or balance');
-  if (!amount || amount <= 0) throw ApiError.badRequest('amount must be greater than 0');
+  const method = parseMethod(req.body?.method);
+  const amount = Math.round(Number(rawAmount) * 100) / 100;
+  if (!Number.isFinite(amount) || amount <= 0) throw ApiError.badRequest('El monto debe ser mayor a 0');
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
 
-  const alreadyExists = order.payments.some((p) => p.kind === kind);
-  if (alreadyExists) throw ApiError.conflict(`Ya existe un pago de tipo "${kind === 'advance' ? 'adelanto' : 'saldo'}"`);
+  /*
+   * No se cobra de más. Lo que está en revisión cuenta como comprometido: si
+   * no, al validar ese comprobante el pedido quedaría pagado dos veces.
+   */
+  const paid = Math.round((validatedTotal(order.payments) - refundedTotal(order.refunds)) * 100) / 100;
+  const inReview = pendingTotal(order.payments);
+  const room = Math.round((order.totalAmount - paid - inReview) * 100) / 100;
+  if (amount > room + 0.001) {
+    throw ApiError.badRequest(
+      room <= 0
+        ? inReview > 0
+          ? 'No queda saldo por cobrar: hay un comprobante en revisión que lo cubre. Valídalo o recházalo primero.'
+          : 'Este pedido ya está pagado completo.'
+        : `El pago supera lo que falta cobrar (S/ ${room.toFixed(2)}).`,
+    );
+  }
+
+  /*
+   * Si hay una caja abierta y se dijo cómo pagó, el pago entra a esa caja: el
+   * saldo que alguien paga en efectivo al recoger también está en el cajón.
+   */
+  const openSession = method
+    ? await CashSession.findOne({ tenant: req.auth.tenantId, status: 'open' }).select('_id').lean()
+    : null;
 
   order.payments.push({
-    kind,
+    kind: kindForNewPayment(paid, amount, order.totalAmount),
     amount,
-    proofImageUrl,
-    note,
+    proofImageUrl: proofImageUrl || undefined,
+    note: note?.trim() || undefined,
     // Lo registra el negocio, así que no hay nada que validar.
     validated: true,
     validatedAt: new Date(),
     registeredAt: new Date(),
     registeredBy: req.auth.userId ? new Types.ObjectId(req.auth.userId) : undefined,
+    method,
+    cashSession: openSession?._id,
   });
 
   // Ya hay un pago nuevo: lo rechazado quedó atrás.
   order.paymentRejectedAt = undefined;
-
-  const totalPaid = validatedTotal(order.payments);
-  const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
-  if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
-    order.paymentState = newPaymentState._id;
-    order.stateHistory.push(buildHistoryEntry(newPaymentState, req.auth.userId));
-  }
+  await syncPaymentState(order, req.auth.tenantId, req.auth.userId);
 
   await order.save();
   res.json({ order });
 });
 
 /**
- * El negocio confirma que el adelanto que subió el cliente efectivamente llegó.
- * Recién aquí cuenta como pagado y puede mover el estado de pago.
+ * El negocio confirma que el comprobante que subió el cliente efectivamente
+ * llegó. Recién aquí cuenta como pagado y puede mover el estado de pago.
+ * Puede decir de paso por dónde llegó (Yape, Plin…), que el cliente no indica.
  */
 export const validatePayment = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { kind } = req.params as { kind: 'advance' | 'balance' };
-  if (!['advance', 'balance'].includes(kind)) {
-    throw ApiError.badRequest('kind must be advance or balance');
-  }
+  const method = parseMethod(req.body?.method);
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
 
-  const payment = order.payments.find((p) => p.kind === kind);
-  if (!payment) throw ApiError.notFound('No hay un pago de ese tipo en este pedido');
+  const idx = findPaymentIndex(order.payments, String(req.params.paymentId));
+  if (idx === -1) throw ApiError.notFound('No encontramos ese pago en el pedido');
+  const payment = order.payments[idx];
   if (payment.validated) throw ApiError.conflict('Ese pago ya está validado');
 
   payment.validated = true;
   payment.validatedAt = new Date();
+  if (method) payment.method = method;
   order.paymentRejectedAt = undefined;
 
-  const totalPaid = validatedTotal(order.payments);
-  const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
-  if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
-    order.paymentState = newPaymentState._id;
-    order.stateHistory.push(buildHistoryEntry(newPaymentState, req.auth.userId));
-  }
-
+  await syncPaymentState(order, req.auth.tenantId, req.auth.userId);
   await order.save();
 
   // El cliente mandó su comprobante a ciegas: merece saber que fue aceptado.
@@ -533,42 +568,49 @@ export const validatePayment = asyncHandler(async (req: Request, res: Response) 
   res.json({ order });
 });
 
+/**
+ * DELETE /orders/:id/payments/:paymentId — quita un pago.
+ *
+ * Sobre un comprobante sin validar es rechazarlo: se le avisa al cliente para
+ * que lo regularice. Sobre uno validado es corregir un error de carga, y no
+ * se avisa a nadie.
+ */
 export const deletePayment = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth?.tenantId) throw ApiError.unauthorized();
-  const { kind } = req.params as { kind: 'advance' | 'balance' };
-  if (!['advance', 'balance'].includes(kind)) throw ApiError.badRequest('kind must be advance or balance');
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
 
-  const idx = order.payments.findIndex((p) => p.kind === kind);
-  if (idx === -1) throw ApiError.notFound(`No hay un pago de tipo "${kind === 'advance' ? 'adelanto' : 'saldo'}"`);
+  // Una venta de mostrador se cobró en el momento: se anula entera, desde la caja.
+  if (order.createdVia === 'pos') {
+    throw ApiError.conflict('Los pagos de una venta de mostrador no se borran: anula la venta desde la caja.');
+  }
+
+  const idx = findPaymentIndex(order.payments, String(req.params.paymentId));
+  if (idx === -1) throw ApiError.notFound('No encontramos ese pago en el pedido');
+
+  /*
+   * Rechazar un comprobante del cliente lo puede hacer quien valida, que es
+   * cualquiera del equipo. Quitar un pago ya cobrado cambia lo que entró a la
+   * caja: eso queda para el dueño y el administrador.
+   */
+  if (order.payments[idx].validated !== false && !['owner', 'admin'].includes(req.auth.role ?? '')) {
+    throw ApiError.forbidden('Solo el dueño o un administrador pueden quitar un pago ya cobrado.');
+  }
 
   const [removed] = order.payments.splice(idx, 1);
 
   // Clean up proof image from R2 (best-effort).
   if (removed.proofImageUrl) await deleteByUrl(removed.proofImageUrl);
 
-  // Re-derive payment state from the remaining payments.
-  const totalPaid = validatedTotal(order.payments);
-  const newPaymentState = await resolvePaymentState(req.auth.tenantId, totalPaid, order.totalAmount);
-  if (newPaymentState && !newPaymentState._id.equals(order.paymentState)) {
-    order.paymentState = newPaymentState._id;
-    order.stateHistory.push(buildHistoryEntry(newPaymentState, req.auth.userId));
-  }
+  await syncPaymentState(order, req.auth.tenantId, req.auth.userId);
+
+  // Queda constancia para el seguimiento: el pago borrado no la dejaría.
+  if (removed.validated === false) order.paymentRejectedAt = new Date();
 
   await order.save();
 
-  /**
-   * Borrar un pago que estaba sin validar es, en los hechos, rechazarlo: el
-   * cliente lo mandó y necesita saber que tiene que regularizarlo. Borrar uno
-   * ya validado es una corrección interna y no se le avisa.
-   */
   if (removed.validated === false) {
-    // Queda constancia para el seguimiento: el pago borrado no la dejaría.
-    order.paymentRejectedAt = new Date();
-    await order.save();
-
     const [customer, tenant, session] = await Promise.all([
       Customer.findById(order.customer).select('name phone').lean(),
       Tenant.findById(req.auth.tenantId).select('name').lean(),
@@ -595,6 +637,11 @@ export const deleteOrder = asyncHandler(async (req: Request, res: Response) => {
 
   const order = await Order.findOne({ _id: req.params.id, tenant: req.auth.tenantId });
   if (!order) throw ApiError.notFound('Order not found');
+
+  // Borrarla haría desaparecer dinero de una caja que alguien va a contar.
+  if (order.createdVia === 'pos') {
+    throw ApiError.conflict('Las ventas de mostrador no se eliminan: anúlala desde la caja.');
+  }
 
   /**
    * El pedido reservó unidades de una campaña: al borrarlo vuelven a estar

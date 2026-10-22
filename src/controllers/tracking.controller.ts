@@ -83,8 +83,10 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
   const advance = sum('advance', true);
   const balance = sum('balance', true);
   const pending = sum('advance', false) + sum('balance', false);
-  const totalPaid = advance + balance;
-  const remaining = Math.max(0, order.totalAmount - totalPaid);
+  // Lo devuelto se descuenta de lo pagado: es dinero que el cliente ya no dejó.
+  const refunded = (order.refunds ?? []).reduce((acc, r) => acc + r.amount, 0);
+  const totalPaid = advance + balance - refunded;
+  const remaining = isCancelled ? 0 : Math.max(0, order.totalAmount - totalPaid);
 
   res.json({
     // El teléfono alimenta el botón para mandar el voucher por WhatsApp.
@@ -102,7 +104,7 @@ export const trackOrder = asyncHandler(async (req: Request, res: Response) => {
       images: (i.product as unknown as { images?: string[] } | null)?.images ?? [],
     })),
     totalAmount: order.totalAmount,
-    payments: { advance, balance, totalPaid, remaining, pending },
+    payments: { advance, balance, totalPaid, remaining, pending, refunded },
     // Solo entonces el cliente tiene algo que regularizar.
     paymentRejected: Boolean(order.paymentRejectedAt),
     fulfillmentLink: order.fulfillmentLink,
