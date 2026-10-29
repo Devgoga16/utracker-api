@@ -7,6 +7,7 @@ import { Tenant } from '../models/Tenant';
 import { Membership } from '../models/Membership';
 import { Order } from '../models/Order';
 import { Bill } from '../models/Bill';
+import { createBill } from '../services/billing';
 import { Campaign } from '../models/Campaign';
 import { Category } from '../models/Category';
 import { Customer } from '../models/Customer';
@@ -114,15 +115,7 @@ export const assignSubscription = asyncHandler(async (req: Request, res: Respons
     const exists = await Bill.exists({ tenant: tenantId, period });
     if (!exists) {
       const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      await Bill.create({
-        tenant: tenantId,
-        subscription: sub._id,
-        period,
-        planName: plan.name,
-        amount: plan.price,
-        dueDate,
-        status: 'pending',
-      });
+      await createBill({ tenant: tenantId, subscription: sub._id, plan, period, dueDate });
     }
   }
 

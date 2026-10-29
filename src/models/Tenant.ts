@@ -60,6 +60,19 @@ export interface ITenant {
    * de hablarlo con él.
    */
   showcase?: boolean;
+  /**
+   * Código para invitar a otros negocios ("DOMINOR"). Se crea la primera vez
+   * que el dueño abre «Invita y gana», no al crear el negocio: la mayoría de
+   * negocios viejos no lo tiene y no hace falta migrarlos.
+   */
+  referralCode?: string;
+  /** El negocio que lo invitó. Solo se fija al crearse, nunca después. */
+  referredBy?: Types.ObjectId;
+  /**
+   * El superadmin anuló el referido (mismo dueño en los dos negocios, cuenta
+   * de prueba...). Deja de dar descuento a los dos lados.
+   */
+  referralRejectedAt?: Date;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -116,6 +129,10 @@ const tenantSchema = new Schema<ITenant>(
       select: false,
     },
     showcase: { type: Boolean, default: false },
+    // `sparse`: los negocios sin código no chocan entre sí como duplicados de null.
+    referralCode: { type: String, trim: true, uppercase: true, unique: true, sparse: true },
+    referredBy: { type: Schema.Types.ObjectId, ref: 'Tenant', index: true },
+    referralRejectedAt: { type: Date },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

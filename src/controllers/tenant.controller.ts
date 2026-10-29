@@ -8,6 +8,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { seedDefaultWorkflow } from '../services/workflowDefaults';
 import { deleteByUrl } from '../services/storage';
 import { tenantHasFeature } from '../middleware/plan';
+import { findReferrerByCode } from '../services/referrals';
 
 function slugify(name: string): string {
   return name
@@ -19,8 +20,18 @@ function slugify(name: string): string {
 
 export const createTenant = asyncHandler(async (req: Request, res: Response) => {
   if (!req.auth) throw ApiError.unauthorized();
-  const { name } = req.body as { name: string };
+  const { name, referralCode } = req.body as { name: string; referralCode?: string };
   if (!name) throw ApiError.badRequest('name is required');
+
+  /*
+   * Un código que no existe no frena la creación: suele venir de un link viejo
+   * guardado en el navegador, y el negocio no tiene la culpa. Tampoco vale
+   * invitarse a uno mismo desde otro negocio propio.
+   */
+  const referrer = await findReferrerByCode(referralCode);
+  const selfReferral =
+    referrer &&
+    (await Membership.exists({ tenant: referrer._id, user: req.auth.userId, isActive: true }));
 
   const baseSlug = slugify(name);
   let slug = baseSlug;
@@ -29,7 +40,11 @@ export const createTenant = asyncHandler(async (req: Request, res: Response) => 
     slug = `${baseSlug}-${suffix++}`;
   }
 
-  const tenant = await Tenant.create({ name, slug });
+  const tenant = await Tenant.create({
+    name,
+    slug,
+    referredBy: referrer && !selfReferral ? referrer._id : undefined,
+  });
   await Membership.create({ tenant: tenant._id, user: req.auth.userId, role: 'owner' });
   await seedDefaultWorkflow(tenant._id);
 

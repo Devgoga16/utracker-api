@@ -22,6 +22,7 @@ import { planRoutes } from './plan.routes';
 import { invitationRoutes, teamRoutes } from './team.routes';
 import { showcaseRoutes } from './showcase.routes';
 import { posRoutes } from './pos.routes';
+import { referralRoutes } from './referral.routes';
 
 export const router = Router();
 
@@ -49,6 +50,8 @@ router.use('/invitations', invitationRoutes);
 router.use('/showcase', showcaseRoutes);
 router.use('/subscription', subscriptionRoutes);
 router.use('/billing', billingRoutes);
+// Invita y gana: el código del negocio y la consulta pública del registro.
+router.use('/referrals', referralRoutes);
 router.use('/campaigns', campaignRoutes);
 // API publica para webs externas; su propio CORS, abierto.
 router.use('/storefront', storefrontRoutes);

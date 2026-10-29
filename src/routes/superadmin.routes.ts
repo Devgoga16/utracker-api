@@ -18,6 +18,7 @@ import {
   updateBill,
 } from '../controllers/billing.controller';
 import { whatsappConfig, whatsappTest } from '../controllers/whatsapp.controller';
+import { listAllReferrals, setReferralRejected } from '../controllers/referral.controller';
 import {
   createPlan,
   deletePlan,
@@ -73,6 +74,10 @@ superadminRoutes.delete('/tenants/:id', deleteTenant);
 superadminRoutes.get('/bills', listAllBills);
 superadminRoutes.post('/bills/generate', generateMonthlyBills);
 superadminRoutes.patch('/bills/:id', updateBill);
+
+// Referidos: quién invitó a quién, y anular los que no valen.
+superadminRoutes.get('/referrals', listAllReferrals);
+superadminRoutes.patch('/referrals/:tenantId', setReferralRejected);
 
 // El navegador nunca habla con el bot: la API key se queda aquí.
 superadminRoutes.get('/whatsapp/config', whatsappConfig);

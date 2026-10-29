@@ -2,13 +2,24 @@ import { Schema, model, Types } from 'mongoose';
 
 export type BillStatus = 'pending' | 'reviewing' | 'paid' | 'overdue';
 
+export interface IBillDiscount {
+  /** "Invitaste a Pasteles Ana". Se muestra tal cual al dueño. */
+  label: string;
+  amount: number;
+}
+
 export interface IBill {
   _id: Types.ObjectId;
   tenant: Types.ObjectId;
   subscription: Types.ObjectId;
   period: string; // "2026-08"
   planName: string;
+  /** Lo que se cobra, ya con los descuentos. */
   amount: number;
+  /** Precio del plan antes de descuentos. Falta en las cuentas viejas: ahí vale `amount`. */
+  baseAmount?: number;
+  /** Por qué se cobra menos. Queda guardado tal cual se calculó ese mes. */
+  discounts?: IBillDiscount[];
   dueDate: Date;
   status: BillStatus;
   proofImageUrl?: string;
@@ -27,6 +38,19 @@ const billSchema = new Schema<IBill>(
     period: { type: String, required: true }, // "YYYY-MM"
     planName: { type: String, required: true },
     amount: { type: Number, required: true, min: 0 },
+    baseAmount: { type: Number, min: 0 },
+    discounts: {
+      type: [
+        new Schema<IBillDiscount>(
+          {
+            label: { type: String, required: true },
+            amount: { type: Number, required: true, min: 0 },
+          },
+          { _id: false },
+        ),
+      ],
+      default: undefined,
+    },
     dueDate: { type: Date, required: true },
     status: {
       type: String,

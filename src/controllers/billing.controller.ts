@@ -5,6 +5,7 @@ import { ApiError } from '../utils/ApiError';
 import { Bill } from '../models/Bill';
 import { Subscription } from '../models/Subscription';
 import { uploadImage } from '../services/storage';
+import { createBill } from '../services/billing';
 
 // ─── Superadmin ───────────────────────────────────────────────────────────────
 
@@ -28,26 +29,18 @@ export const generateMonthlyBills = asyncHandler(async (req: Request, res: Respo
   const [year, month] = period.split('-').map(Number);
 
   const subs = await Subscription.find({ status: { $in: ['trial', 'active'] } })
-    .populate('plan', 'name price')
+    .populate('plan', 'name code price')
     .lean();
 
   let created = 0;
   for (const sub of subs) {
-    const plan = sub.plan as unknown as { name: string; price: number } | null;
+    const plan = sub.plan as unknown as { name: string; code?: string; price: number } | null;
     if (!plan || plan.price === 0) continue;
     const exists = await Bill.exists({ tenant: sub.tenant, period });
     if (exists) continue;
     // Last day of the billed month
     const dueDate = new Date(year, month, 0);
-    await Bill.create({
-      tenant: sub.tenant,
-      subscription: sub._id,
-      period,
-      planName: plan.name,
-      amount: plan.price,
-      dueDate,
-      status: 'pending',
-    });
+    await createBill({ tenant: sub.tenant, subscription: sub._id, plan, period, dueDate });
     created++;
   }
 
@@ -77,7 +70,7 @@ export const getMyBills = asyncHandler(async (req: Request, res: Response) => {
   const bills = await Bill.find({ tenant: req.auth.tenantId })
     .sort({ period: -1 })
     .lean();
-  res.json(bills);
+  res.json({ bills });
 });
 
 export const uploadProofFile = asyncHandler(async (req: Request, res: Response) => {
