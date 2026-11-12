@@ -99,6 +99,17 @@ export function isWhatsappConfigured(): boolean {
 }
 
 /**
+ * El origen desde el que la app de Android sirve la web empaquetada
+ * (`server.hostname` en capacitor.config.json del front).
+ *
+ * Va fijo en el código y no en CORS_ORIGIN: es parte de la app, no del
+ * despliegue, y olvidarlo en una variable dejaría el APK sin poder entrar.
+ * `.utracker` no es un dominio que exista en internet, así que ninguna web
+ * puede hacerse pasar por este origen.
+ */
+const NATIVE_APP_ORIGINS = ['https://app.utracker'];
+
+/**
  * Decide si un origen puede llamar a la API.
  *
  * Acepta comodines ("https://*.vercel.app") porque los previews de Vercel
@@ -108,6 +119,7 @@ export function isWhatsappConfigured(): boolean {
  */
 export function isOriginAllowed(origin: string): boolean {
   const clean = origin.replace(/\/$/, '');
+  if (NATIVE_APP_ORIGINS.includes(clean)) return true;
 
   return env.corsOrigins.some((allowed) => {
     if (!allowed.includes('*')) return allowed === clean;
